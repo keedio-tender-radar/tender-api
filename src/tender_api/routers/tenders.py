@@ -71,6 +71,33 @@ def list_tenders(
     return [tender_to_contract(r) for r in rows]
 
 
+@router.get("/search", response_model=list[TenderWithScore])
+def search_tenders(
+    session: Session = Depends(get_session),
+    status: str | None = Query(default=None),
+    q: str | None = Query(default=None, description="Búsqueda por título (subcadena)."),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    """Listado con búsqueda/paginación que incluye el último score de cada licitación."""
+    stmt = select(Tender).order_by(Tender.created_at.desc())
+    if status:
+        stmt = stmt.where(Tender.status == status)
+    if q:
+        stmt = stmt.where(Tender.title.ilike(f"%{q}%"))
+    rows = session.scalars(stmt.offset(offset).limit(limit)).all()
+    out = []
+    for r in rows:
+        score = _latest_score(session, r.id)
+        out.append(
+            TenderWithScore(
+                tender=tender_to_contract(r),
+                score=score_to_contract(score) if score else None,
+            )
+        )
+    return out
+
+
 @router.get("/top", response_model=list[TenderWithScore])
 def top_tenders(
     session: Session = Depends(get_session),

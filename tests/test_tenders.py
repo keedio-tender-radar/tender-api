@@ -57,6 +57,24 @@ def test_list_pagination(client):
     assert len(ids) == 5
 
 
+def test_search_includes_score(client):
+    from tests.conftest import full_breakdown
+
+    a = make_tender(client, source_id="A", title="Plataforma de datos")
+    make_tender(client, source_id="B", title="Servicio de limpieza")
+    bd = full_breakdown()
+    client.put(
+        f"/api/tenders/{a['id']}/score",
+        json={"total": sum(bd.values()), "breakdown": bd, "recommendation": "go"},
+    )
+    res = client.get("/api/tenders/search?q=datos").json()
+    assert len(res) == 1
+    assert res[0]["tender"]["title"] == "Plataforma de datos"
+    assert res[0]["score"]["recommendation"] == "go"
+    # paginación disponible
+    assert client.get("/api/tenders/search?limit=1&offset=0").status_code == 200
+
+
 def test_get_unknown_404(client):
     assert client.get("/api/tenders/nope").status_code == 404
 
