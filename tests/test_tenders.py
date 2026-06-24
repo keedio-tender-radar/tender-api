@@ -75,6 +75,28 @@ def test_search_includes_score(client):
     assert client.get("/api/tenders/search?limit=1&offset=0").status_code == 200
 
 
+def test_search_order_by_score(client):
+    from tests.conftest import full_breakdown
+
+    def score(tid, total_dim):
+        bd = full_breakdown({"technical_fit": total_dim})
+        client.put(
+            f"/api/tenders/{tid}/score",
+            json={"total": sum(bd.values()), "breakdown": bd, "recommendation": "go"},
+        )
+
+    low = make_tender(client, source_id="LOW", title="Baja")
+    high = make_tender(client, source_id="HIGH", title="Alta")
+    make_tender(client, source_id="NONE", title="Sin score")
+    score(low["id"], 5)
+    score(high["id"], 30)
+
+    res = client.get("/api/tenders/search?order=score").json()
+    titles = [x["tender"]["title"] for x in res]
+    assert titles[0] == "Alta"  # mayor score primero
+    assert titles[-1] == "Sin score"  # sin score al final
+
+
 def test_get_unknown_404(client):
     assert client.get("/api/tenders/nope").status_code == 404
 

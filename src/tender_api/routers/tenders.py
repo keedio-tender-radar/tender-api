@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 from tender_contracts import Tender as TenderContract
 
@@ -76,15 +76,46 @@ def search_tenders(
     session: Session = Depends(get_session),
     status: str | None = Query(default=None),
     q: str | None = Query(default=None, description="Búsqueda por título (subcadena)."),
+    order: str = Query(default="recent", description="recent | score"),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
-    """Listado con búsqueda/paginación que incluye el último score de cada licitación."""
-    stmt = select(Tender).order_by(Tender.created_at.desc())
+    """Listado con búsqueda/paginación que incluye el último score de cada licitación.
+
+    `order=score` ordena por la nota del último score (desc, sin score al final).
+    """
+    stmt = select(Tender)
     if status:
         stmt = stmt.where(Tender.status == status)
     if q:
         stmt = stmt.where(Tender.title.ilike(f"%{q}%"))
+
+    if order == "score":
+        latest = (
+            select(
+                TenderScore.tender_id.label("tid"),
+                func.max(TenderScore.created_at).label("mx"),
+            )
+            .group_by(TenderScore.tender_id)
+            .subquery()
+        )
+        latest_total = (
+            select(TenderScore.tender_id.label("tid"), TenderScore.total.label("total"))
+            .join(
+                latest,
+                and_(
+                    TenderScore.tender_id == latest.c.tid,
+                    TenderScore.created_at == latest.c.mx,
+                ),
+            )
+            .subquery()
+        )
+        stmt = stmt.outerjoin(latest_total, latest_total.c.tid == Tender.id).order_by(
+            latest_total.c.total.desc().nullslast(), Tender.created_at.desc()
+        )
+    else:
+        stmt = stmt.order_by(Tender.created_at.desc())
+
     rows = session.scalars(stmt.offset(offset).limit(limit)).all()
     out = []
     for r in rows:
