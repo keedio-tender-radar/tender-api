@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import csv
+import io
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 from tender_contracts import Tender as TenderContract
@@ -171,6 +174,47 @@ def urgent_tenders(
         )
         for t in rows
     ]
+
+
+@router.get("/export.csv")
+def export_csv(
+    session: Session = Depends(get_session),
+    status: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+):
+    """Exporta las licitaciones (con su último score) a CSV, respetando los filtros."""
+    stmt = select(Tender).order_by(Tender.created_at.desc())
+    if status:
+        stmt = stmt.where(Tender.status == status)
+    if q:
+        stmt = stmt.where(Tender.title.ilike(f"%{q}%"))
+    rows = session.scalars(stmt.limit(1000)).all()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf, delimiter=";")
+    writer.writerow(
+        ["source", "source_id", "title", "buyer", "budget_amount", "currency",
+         "deadline", "status", "score", "recommendation", "url"]
+    )
+    for r in rows:
+        score = _latest_score(session, r.id)
+        writer.writerow(
+            [
+                r.source, r.source_id, r.title, r.buyer or "",
+                "" if r.budget_amount is None else r.budget_amount,
+                r.currency,
+                r.deadline.isoformat() if r.deadline else "",
+                r.status,
+                "" if score is None else score.total,
+                "" if score is None else score.recommendation,
+                r.url or "",
+            ]
+        )
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="tender-radar.csv"'},
+    )
 
 
 @router.get("/stats")
