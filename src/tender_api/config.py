@@ -13,7 +13,14 @@ class Settings(BaseSettings):
     # Umbral de "urgente": días hasta el cierre para el endpoint /urgent.
     urgent_days: int = 7
 
+    # CORS: orígenes permitidos para el dashboard (coma-separados).
+    cors_origins: str = "http://localhost:3000,https://vz4wf92x.insforge.site"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
 
 settings = Settings()
