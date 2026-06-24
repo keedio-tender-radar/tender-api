@@ -35,6 +35,28 @@ def test_list_filter_by_status(client):
     assert client.get("/api/tenders?status=scored").json() == []
 
 
+def test_list_search_by_title(client):
+    make_tender(client, source_id="A", title="Plataforma de datos")
+    make_tender(client, source_id="B", title="Servicio de limpieza")
+    res = client.get("/api/tenders?q=datos").json()
+    assert len(res) == 1
+    assert res[0]["title"] == "Plataforma de datos"
+    # insensible a mayúsculas
+    assert len(client.get("/api/tenders?q=LIMPIEZA").json()) == 1
+
+
+def test_list_pagination(client):
+    for i in range(5):
+        make_tender(client, source_id=f"P{i}", title=f"Licitacion {i}")
+    page1 = client.get("/api/tenders?limit=2&offset=0").json()
+    page2 = client.get("/api/tenders?limit=2&offset=2").json()
+    page3 = client.get("/api/tenders?limit=2&offset=4").json()
+    assert len(page1) == 2 and len(page2) == 2 and len(page3) == 1
+    # sin solapamiento entre páginas
+    ids = {t["id"] for t in page1} | {t["id"] for t in page2} | {t["id"] for t in page3}
+    assert len(ids) == 5
+
+
 def test_get_unknown_404(client):
     assert client.get("/api/tenders/nope").status_code == 404
 

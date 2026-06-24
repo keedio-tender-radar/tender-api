@@ -58,12 +58,16 @@ def ingest_tender(payload: TenderCreate, session: Session = Depends(get_session)
 def list_tenders(
     session: Session = Depends(get_session),
     status: str | None = Query(default=None),
+    q: str | None = Query(default=None, description="Búsqueda por título (subcadena)."),
     limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ):
     stmt = select(Tender).order_by(Tender.created_at.desc())
     if status:
         stmt = stmt.where(Tender.status == status)
-    rows = session.scalars(stmt.limit(limit)).all()
+    if q:
+        stmt = stmt.where(Tender.title.ilike(f"%{q}%"))
+    rows = session.scalars(stmt.offset(offset).limit(limit)).all()
     return [tender_to_contract(r) for r in rows]
 
 
