@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from tender_contracts import Tender as TenderContract
 
@@ -113,6 +113,39 @@ def urgent_tenders(
         )
         for t in rows
     ]
+
+
+@router.get("/stats")
+def stats(session: Session = Depends(get_session)) -> dict:
+    """Agregados para el panel de visión general (conteos y presupuesto de oportunidades)."""
+
+    def _grouped(column) -> dict[str, int]:
+        rows = session.execute(select(column, func.count()).group_by(column)).all()
+        return {str(k): int(n) for k, n in rows}
+
+    total = session.scalar(select(func.count()).select_from(Tender)) or 0
+    by_status = _grouped(Tender.status)
+    by_source = _grouped(Tender.source)
+    by_recommendation = _grouped(TenderScore.recommendation)
+
+    go_budget_total = (
+        session.scalar(
+            select(func.coalesce(func.sum(Tender.budget_amount), 0.0))
+            .select_from(Tender)
+            .join(TenderScore, TenderScore.tender_id == Tender.id)
+            .where(TenderScore.recommendation == "go")
+        )
+        or 0.0
+    )
+
+    return {
+        "total": total,
+        "by_status": by_status,
+        "by_source": by_source,
+        "by_recommendation": by_recommendation,
+        "go_count": by_recommendation.get("go", 0),
+        "go_budget_total": float(go_budget_total),
+    }
 
 
 @router.get("/{tender_id}", response_model=TenderContract)
