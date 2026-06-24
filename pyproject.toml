@@ -1,0 +1,30 @@
+[project]
+name = "tender-api"
+version = "0.1.0"
+description = "API núcleo de Keedio Tender Radar"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "sqlalchemy>=2.0",
+  "alembic>=1.13",
+  "pydantic>=2.6",
+  "pydantic-settings>=2.5",
+  "psycopg[binary]>=3.2",
+  # Contratos compartidos. En dev: pip install -e ../tender-shared-contracts
+  # En despliegue: instalar desde git (repo privado → requiere credenciales).
+  "tender-contracts",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# B008: Depends(...) en argumentos por defecto es el patrón idiomático de FastAPI.
+ignore = ["B008"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
