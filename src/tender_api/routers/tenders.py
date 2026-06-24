@@ -196,13 +196,26 @@ def stats(session: Session = Depends(get_session)) -> dict:
         or 0.0
     )
 
+    scored_count = session.scalar(select(func.count()).select_from(TenderScore)) or 0
+    avg_score = session.scalar(select(func.avg(TenderScore.total))) or 0
+
+    # Top CPV (las listas CPV son JSON por licitación → se agregan en Python; volumen pequeño).
+    counter: dict[str, int] = {}
+    for (cpvs,) in session.execute(select(Tender.cpv)).all():
+        for code in cpvs or []:
+            counter[code] = counter.get(code, 0) + 1
+    by_cpv = dict(sorted(counter.items(), key=lambda kv: kv[1], reverse=True)[:8])
+
     return {
         "total": total,
         "by_status": by_status,
         "by_source": by_source,
         "by_recommendation": by_recommendation,
+        "by_cpv": by_cpv,
         "go_count": by_recommendation.get("go", 0),
         "go_budget_total": float(go_budget_total),
+        "scored_count": scored_count,
+        "avg_score": round(float(avg_score)),
     }
 
 

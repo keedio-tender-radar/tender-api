@@ -36,3 +36,13 @@ def test_stats_aggregates(client):
     assert s["go_count"] == 2
     # presupuesto de las dos GO (620000 + 300000)
     assert s["go_budget_total"] == 920000.0
+    assert s["scored_count"] == 3
+    assert s["avg_score"] > 0
+
+
+def test_stats_by_cpv(client):
+    make_tender(client, source_id="A", cpv=["72300000", "48000000"])
+    make_tender(client, source_id="B", cpv=["72300000"])
+    s = client.get("/api/tenders/stats").json()
+    assert s["by_cpv"]["72300000"] == 2
+    assert s["by_cpv"]["48000000"] == 1
