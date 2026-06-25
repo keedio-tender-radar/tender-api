@@ -22,10 +22,19 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False
 
 
 def init_db() -> None:
-    """Crea las tablas (conveniencia MVP; en producción se usa Alembic)."""
+    """Crea las tablas (conveniencia MVP; en producción se usa Alembic).
+
+    No es fatal: si la BD no está disponible al arrancar (blip transitorio), se registra y la
+    app sigue arrancando — así un fallo de BD no provoca un crash-loop del contenedor.
+    """
+    import logging
+
     from tender_api import models  # noqa: F401  (registra los modelos)
 
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("tender_api").warning("init_db: create_all falló: %s", exc)
 
 
 def get_session() -> Generator[Session, None, None]:
