@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     analysis_service_url: str = ""
     analysis_token: str = ""  # X-Run-Token para /analyze si el servicio lo exige
 
+    # Token que protege endpoints batch para el scheduler (p. ej. reanalyze-relevant).
+    run_token: str = ""
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property

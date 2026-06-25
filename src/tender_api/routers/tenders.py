@@ -7,7 +7,7 @@ import io
 from datetime import UTC, datetime, timedelta
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import Response
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
@@ -283,25 +283,14 @@ def extract_document(tender_id: str, session: Session = Depends(get_session)) ->
     return result
 
 
-@router.post("/{tender_id}/reanalyze", response_model=ScoreContract)
-def reanalyze(tender_id: str, session: Session = Depends(get_session)):
-    """Extrae el pliego y re-puntúa la licitación con su contenido (doc-service + ai-analysis)."""
-    tender = _get_or_404(session, tender_id)
-    if not doc_client.is_configured() or not analysis_client.is_configured():
-        raise HTTPException(503, "doc-service o analysis-service no configurados.")
-    if not tender.url:
-        raise HTTPException(422, "La licitación no tiene URL de documento.")
-
-    try:
-        extraction = doc_client.extract(tender.url)
-        chunks = extraction.get("chunks", [])
-        document_text = "\n".join(c.get("content", "") for c in chunks)[:20000]
-        result = analysis_client.analyze(
-            tender_to_contract(tender).model_dump(mode="json"), document_text
-        )
-    except httpx.HTTPError as exc:
-        raise HTTPException(502, f"Re-análisis fallido: {exc}") from exc
-
+def _reanalyze_one(session: Session, tender: Tender) -> TenderScore:
+    """Extrae el pliego, re-puntúa con su contenido y persiste el score. Lanza httpx.HTTPError."""
+    extraction = doc_client.extract(tender.url)
+    chunks = extraction.get("chunks", [])
+    document_text = "\n".join(c.get("content", "") for c in chunks)[:20000]
+    result = analysis_client.analyze(
+        tender_to_contract(tender).model_dump(mode="json"), document_text
+    )
     sc = result["score"]
     row = TenderScore(
         tender_id=tender.id,
@@ -316,6 +305,59 @@ def reanalyze(tender_id: str, session: Session = Depends(get_session)):
     tender.status = "scored"
     session.commit()
     session.refresh(row)
+    return row
+
+
+@router.post("/reanalyze-relevant")
+def reanalyze_relevant(
+    session: Session = Depends(get_session),
+    x_run_token: str | None = Header(default=None),
+    limit: int = Query(default=5, ge=1, le=20),
+):
+    """Re-analiza con su pliego las licitaciones relevantes (GO/REVISAR) aún no basadas en doc.
+
+    Pensado para el scheduler diario. Protegido por X-Run-Token si `run_token` está configurado.
+    """
+    if settings.run_token and x_run_token != settings.run_token:
+        raise HTTPException(401, "Token de ejecución inválido o ausente.")
+    if not doc_client.is_configured() or not analysis_client.is_configured():
+        raise HTTPException(503, "doc-service o analysis-service no configurados.")
+
+    candidates: list[Tender] = []
+    for tender in session.scalars(select(Tender).where(Tender.url.is_not(None))).all():
+        score = _latest_score(session, tender.id)
+        if (
+            score is not None
+            and score.recommendation in ("go", "revisar")
+            and not score.model_version.endswith("+doc")
+        ):
+            candidates.append(tender)
+        if len(candidates) >= limit:
+            break
+
+    reanalyzed, errors = 0, []
+    for tender in candidates:
+        try:
+            _reanalyze_one(session, tender)
+            reanalyzed += 1
+        except Exception as exc:  # noqa: BLE001 — una con error no tumba el lote
+            session.rollback()
+            errors.append(f"{tender.id}: {type(exc).__name__}")
+    return {"candidates": len(candidates), "reanalyzed": reanalyzed, "errors": errors}
+
+
+@router.post("/{tender_id}/reanalyze", response_model=ScoreContract)
+def reanalyze(tender_id: str, session: Session = Depends(get_session)):
+    """Extrae el pliego y re-puntúa la licitación con su contenido (doc-service + ai-analysis)."""
+    tender = _get_or_404(session, tender_id)
+    if not doc_client.is_configured() or not analysis_client.is_configured():
+        raise HTTPException(503, "doc-service o analysis-service no configurados.")
+    if not tender.url:
+        raise HTTPException(422, "La licitación no tiene URL de documento.")
+    try:
+        row = _reanalyze_one(session, tender)
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"Re-análisis fallido: {exc}") from exc
     return score_to_contract(row)
 
 
