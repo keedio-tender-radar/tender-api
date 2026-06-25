@@ -6,6 +6,7 @@ import csv
 import io
 from datetime import UTC, datetime, timedelta
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from sqlalchemy import and_, func, select
@@ -16,6 +17,7 @@ from tender_api.config import settings
 from tender_api.database import get_session
 from tender_api.models import Tender, TenderScore
 from tender_api.schemas import TenderCreate, TenderWithScore, score_to_contract, tender_to_contract
+from tender_api.services import doc_client
 
 router = APIRouter(prefix="/api/tenders", tags=["tenders"])
 
@@ -261,6 +263,23 @@ def stats(session: Session = Depends(get_session)) -> dict:
         "scored_count": scored_count,
         "avg_score": round(float(avg_score)),
     }
+
+
+@router.post("/{tender_id}/extract")
+def extract_document(tender_id: str, session: Session = Depends(get_session)) -> dict:
+    """Extrae el texto del documento del anuncio vía tender-document-service."""
+    tender = _get_or_404(session, tender_id)
+    if not doc_client.is_configured():
+        raise HTTPException(503, "tender-document-service no está configurado.")
+    if not tender.url:
+        raise HTTPException(422, "La licitación no tiene URL de documento.")
+    try:
+        result = doc_client.extract(tender.url)
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"Extracción fallida: {exc}") from exc
+    # Limita los fragmentos devueltos para no inflar la respuesta.
+    result["chunks"] = (result.get("chunks") or [])[:5]
+    return result
 
 
 @router.get("/{tender_id}", response_model=TenderContract)

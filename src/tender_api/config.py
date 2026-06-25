@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     # CORS: orígenes permitidos para el dashboard (coma-separados).
     cors_origins: str = "http://localhost:3000,https://vz4wf92x.insforge.site"
 
+    # tender-document-service (extracción de pliegos). Vacío = función deshabilitada.
+    doc_service_url: str = ""
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property
