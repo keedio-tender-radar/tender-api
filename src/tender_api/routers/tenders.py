@@ -10,22 +10,24 @@ from datetime import UTC, datetime, timedelta
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import Response
-from sqlalchemy import and_, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from tender_contracts import Tender as TenderContract
 from tender_contracts import TenderScore as ScoreContract
 
 from tender_api.config import settings
 from tender_api.database import get_session
-from tender_api.models import Tender, TenderScore
+from tender_api.models import Tender, TenderDecision, TenderScore
 from tender_api.schemas import (
     AskRequest,
+    DecisionCreate,
     TenderCreate,
     TenderWithScore,
     score_to_contract,
     tender_to_contract,
 )
-from tender_api.services import analysis_client, doc_client, visual_rag_client
+from tender_api.services import analysis_client, doc_client, semaphore, visual_rag_client
+from tender_api.services.learning import learning_insights
 
 router = APIRouter(prefix="/api/tenders", tags=["tenders"])
 
@@ -84,62 +86,87 @@ def list_tenders(
     return [tender_to_contract(r) for r in rows]
 
 
+def _parse_dt(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise HTTPException(422, f"Fecha inválida: {raw}") from exc
+
+
+def _aware(dt: datetime) -> datetime:
+    """Normaliza a tz-aware (UTC) para comparar deadlines sin romper en naive/aware."""
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
+
+
 @router.get("/search", response_model=list[TenderWithScore])
 def search_tenders(
     session: Session = Depends(get_session),
     status: str | None = Query(default=None),
     q: str | None = Query(default=None, description="Búsqueda por título (subcadena)."),
     order: str = Query(default="recent", description="recent | score"),
+    source: str | None = Query(default=None),
+    contracting_body: str | None = Query(default=None, description="Órgano (subcadena)."),
+    recommendation: str | None = Query(default=None),
+    traffic_light: str | None = Query(default=None, description="green|yellow|red|gray"),
+    deadline_before: str | None = Query(default=None),
+    deadline_after: str | None = Query(default=None),
+    min_score: int | None = Query(default=None),
+    max_score: int | None = Query(default=None),
+    max_days_remaining: int | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
-    """Listado con búsqueda/paginación que incluye el último score de cada licitación.
+    """Listado operativo con filtros (score, semáforo, plazo, órgano) y el último score."""
+    dl_before, dl_after = _parse_dt(deadline_before), _parse_dt(deadline_after)
 
-    `order=score` ordena por la nota del último score (desc, sin score al final).
-    """
     stmt = select(Tender)
     if status:
         stmt = stmt.where(Tender.status == status)
     if q:
         stmt = stmt.where(Tender.title.ilike(f"%{q}%"))
+    if source:
+        stmt = stmt.where(Tender.source == source)
+    if contracting_body:
+        stmt = stmt.where(Tender.buyer.ilike(f"%{contracting_body}%"))
+
+    items: list[tuple] = []
+    for r in session.scalars(stmt).all():
+        score = _latest_score(session, r.id)
+        total = score.total if score else None
+        rec = score.recommendation if score else None
+        days = semaphore.days_remaining(r.deadline)
+        light = semaphore.traffic_light(total, rec, days)["light"]
+
+        if recommendation and (rec or "").lower() != recommendation.lower():
+            continue
+        if traffic_light and light != traffic_light:
+            continue
+        if min_score is not None and (total is None or total < min_score):
+            continue
+        if max_score is not None and (total is None or total > max_score):
+            continue
+        if max_days_remaining is not None and (days is None or days > max_days_remaining):
+            continue
+        if dl_before and (r.deadline is None or _aware(r.deadline) > _aware(dl_before)):
+            continue
+        if dl_after and (r.deadline is None or _aware(r.deadline) < _aware(dl_after)):
+            continue
+        items.append((r, score, total))
 
     if order == "score":
-        latest = (
-            select(
-                TenderScore.tender_id.label("tid"),
-                func.max(TenderScore.created_at).label("mx"),
-            )
-            .group_by(TenderScore.tender_id)
-            .subquery()
-        )
-        latest_total = (
-            select(TenderScore.tender_id.label("tid"), TenderScore.total.label("total"))
-            .join(
-                latest,
-                and_(
-                    TenderScore.tender_id == latest.c.tid,
-                    TenderScore.created_at == latest.c.mx,
-                ),
-            )
-            .subquery()
-        )
-        stmt = stmt.outerjoin(latest_total, latest_total.c.tid == Tender.id).order_by(
-            latest_total.c.total.desc().nullslast(), Tender.created_at.desc()
-        )
+        items.sort(key=lambda x: (x[2] is None, -(x[2] or 0)))
     else:
-        stmt = stmt.order_by(Tender.created_at.desc())
+        items.sort(key=lambda x: x[0].created_at, reverse=True)
 
-    rows = session.scalars(stmt.offset(offset).limit(limit)).all()
-    out = []
-    for r in rows:
-        score = _latest_score(session, r.id)
-        out.append(
-            TenderWithScore(
-                tender=tender_to_contract(r),
-                score=score_to_contract(score) if score else None,
-            )
+    page = items[offset : offset + limit]
+    return [
+        TenderWithScore(
+            tender=tender_to_contract(r), score=score_to_contract(s) if s else None
         )
-    return out
+        for r, s, _ in page
+    ]
 
 
 @router.get("/top", response_model=list[TenderWithScore])
@@ -424,6 +451,65 @@ def ask(tender_id: str, payload: AskRequest, session: Session = Depends(get_sess
             {"section": c.get("section"), "content": c.get("content", "")[:600]} for c in top
         ],
     }
+
+
+@router.get("/{tender_id}/traffic-light")
+def get_traffic_light(tender_id: str, session: Session = Depends(get_session)) -> dict:
+    """Semáforo de oportunidad (verde/amarillo/rojo/gris) a partir de score, recom. y plazo."""
+    tender = _get_or_404(session, tender_id)
+    score = _latest_score(session, tender_id)
+    days = semaphore.days_remaining(tender.deadline)
+    total = score.total if score else None
+    rec = score.recommendation if score else None
+    light = semaphore.traffic_light(total, rec, days)
+    return {
+        "external_tender_id": tender.source_id,
+        "deadline": tender.deadline.isoformat() if tender.deadline else None,
+        "final_score": total,
+        "recommendation": rec,
+        "traffic_light": light["light"],
+        "traffic_light_label": light["label"],
+        "traffic_light_reason": light["reason"],
+        "days_remaining": days,
+    }
+
+
+@router.patch("/{tender_id}/deadline", response_model=TenderContract)
+def update_deadline(
+    tender_id: str, payload: dict, session: Session = Depends(get_session)
+):
+    """Actualiza manualmente la fecha final de la licitación (ISO 8601 en `deadline`)."""
+    tender = _get_or_404(session, tender_id)
+    raw = payload.get("deadline")
+    if not raw:
+        raise HTTPException(422, "Falta 'deadline' (ISO 8601).")
+    try:
+        tender.deadline = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise HTTPException(422, f"Fecha inválida: {exc}") from exc
+    session.commit()
+    session.refresh(tender)
+    return tender_to_contract(tender)
+
+
+@router.post("/{tender_id}/decision", status_code=201)
+def record_decision(
+    tender_id: str, payload: DecisionCreate, session: Session = Depends(get_session)
+) -> dict:
+    """Registra una decisión histórica (GO/NO-GO/…) y su resultado, para el aprendizaje."""
+    _get_or_404(session, tender_id)
+    row = TenderDecision(tender_id=tender_id, **payload.model_dump())
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return {"id": row.id, "tender_id": tender_id, "decision": row.decision}
+
+
+@router.get("/{tender_id}/learning-insights")
+def get_learning_insights(tender_id: str, session: Session = Depends(get_session)) -> dict:
+    """Compara con decisiones históricas similares (CPV/órgano/presupuesto)."""
+    tender = _get_or_404(session, tender_id)
+    return learning_insights(session, tender)
 
 
 @router.get("/{tender_id}", response_model=TenderContract)

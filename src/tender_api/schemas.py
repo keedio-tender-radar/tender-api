@@ -81,6 +81,20 @@ class AskRequest(BaseModel):
     top_k: int = 5
 
 
+class DecisionCreate(BaseModel):
+    """Decisión histórica sobre una licitación (alimenta el aprendizaje)."""
+
+    decision: str  # GO / NO_GO / REVISAR / PARTNER / PRESENTADA / DESCARTAR
+    outcome: str | None = None  # ganada / perdida / presentada / no_presentada / pendiente
+    final_score: int | None = None
+    awarded_company: str | None = None
+    awarded_amount: float | None = None
+    bid_amount: float | None = None
+    reason: str | None = None
+    notes: str | None = None
+    tags: list[str] = Field(default_factory=list)
+
+
 def tender_to_contract(row: models.Tender) -> TenderContract:
     return TenderContract(
         id=row.id,

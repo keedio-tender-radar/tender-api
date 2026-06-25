@@ -52,6 +52,9 @@ class Tender(Base):
     actions: Mapped[list[TenderAction]] = relationship(
         back_populates="tender", cascade="all, delete-orphan"
     )
+    decisions: Mapped[list[TenderDecision]] = relationship(
+        back_populates="tender", cascade="all, delete-orphan"
+    )
 
 
 class TenderScore(Base):
@@ -68,6 +71,27 @@ class TenderScore(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     tender: Mapped[Tender] = relationship(back_populates="scores")
+
+
+class TenderDecision(Base):
+    """Decisión histórica sobre una licitación (alimenta el aprendizaje y el histórico)."""
+
+    __tablename__ = "tender_decisions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    tender_id: Mapped[str] = mapped_column(ForeignKey("tenders.id"), index=True)
+    decision: Mapped[str] = mapped_column(String, index=True)  # GO/NO_GO/REVISAR/PARTNER/...
+    outcome: Mapped[str | None] = mapped_column(String, nullable=True)  # ganada/perdida/...
+    final_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    awarded_company: Mapped[str | None] = mapped_column(String, nullable=True)
+    awarded_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bid_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    notes: Mapped[str | None] = mapped_column(String, nullable=True)
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    tender: Mapped[Tender] = relationship(back_populates="decisions")
 
 
 class TenderAction(Base):
