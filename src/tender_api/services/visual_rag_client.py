@@ -21,11 +21,16 @@ def _client() -> httpx.Client:
     )
 
 
-def ask(question: str, tender_id: str, top_k: int) -> dict:
-    """Pregunta al pliego vía visual-rag. Devuelve la respuesta cruda del servicio."""
+def ask(question: str, tender_id: str, top_k: int, document_text: str | None = None) -> dict:
+    """Pregunta al pliego vía visual-rag. Devuelve la respuesta cruda del servicio.
+
+    `document_text` permite que el backend indice al vuelo (scaffold) o lo ignore si ya
+    pre-ingestó el expediente (backend real PixelRAG).
+    """
+    payload: dict = {"question": question, "tender_id": tender_id, "top_k": top_k}
+    if document_text:
+        payload["document_text"] = document_text
     with _client() as client:
-        resp = client.post(
-            "/ask", json={"question": question, "tender_id": tender_id, "top_k": top_k}
-        )
+        resp = client.post("/ask", json=payload)
         resp.raise_for_status()
         return resp.json()

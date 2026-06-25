@@ -386,9 +386,19 @@ def ask(tender_id: str, payload: AskRequest, session: Session = Depends(get_sess
     """Pregunta sobre el pliego. Usa tender-visual-rag si está configurado; si no, QA extractivo."""
     tender = _get_or_404(session, tender_id)
 
+    # Texto del pliego (si doc-service está disponible): sirve al fallback extractivo y permite que
+    # visual-rag indice al vuelo si aún no pre-ingestó el expediente.
+    chunks: list[dict] = []
+    if doc_client.is_configured() and tender.url:
+        try:
+            chunks = doc_client.extract(tender.url).get("chunks", [])
+        except httpx.HTTPError:
+            chunks = []
+    document_text = "\n".join(c.get("content", "") for c in chunks)[:20000] or None
+
     if visual_rag_client.is_configured():
         try:
-            res = visual_rag_client.ask(payload.question, tender.id, payload.top_k)
+            res = visual_rag_client.ask(payload.question, tender.id, payload.top_k, document_text)
         except httpx.HTTPError as exc:
             raise HTTPException(502, f"visual-rag falló: {exc}") from exc
         return {
@@ -402,12 +412,10 @@ def ask(tender_id: str, payload: AskRequest, session: Session = Depends(get_sess
         raise HTTPException(503, "Ni visual-rag ni doc-service configurados.")
     if not tender.url:
         raise HTTPException(422, "La licitación no tiene URL de documento.")
-    try:
-        extraction = doc_client.extract(tender.url)
-    except httpx.HTTPError as exc:
-        raise HTTPException(502, f"Extracción fallida: {exc}") from exc
+    if not chunks:
+        raise HTTPException(502, "No se pudo extraer el pliego.")
 
-    top = _rank_chunks(payload.question, extraction.get("chunks", []), payload.top_k)
+    top = _rank_chunks(payload.question, chunks, payload.top_k)
     answer = top[0]["content"][:800] if top else None
     return {
         "backend": "extractive",
