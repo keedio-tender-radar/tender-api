@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -17,8 +18,14 @@ from tender_contracts import TenderScore as ScoreContract
 from tender_api.config import settings
 from tender_api.database import get_session
 from tender_api.models import Tender, TenderScore
-from tender_api.schemas import TenderCreate, TenderWithScore, score_to_contract, tender_to_contract
-from tender_api.services import analysis_client, doc_client
+from tender_api.schemas import (
+    AskRequest,
+    TenderCreate,
+    TenderWithScore,
+    score_to_contract,
+    tender_to_contract,
+)
+from tender_api.services import analysis_client, doc_client, visual_rag_client
 
 router = APIRouter(prefix="/api/tenders", tags=["tenders"])
 
@@ -359,6 +366,56 @@ def reanalyze(tender_id: str, session: Session = Depends(get_session)):
     except httpx.HTTPError as exc:
         raise HTTPException(502, f"Re-análisis fallido: {exc}") from exc
     return score_to_contract(row)
+
+
+def _rank_chunks(question: str, chunks: list[dict], top_k: int) -> list[dict]:
+    """QA extractivo: ordena los fragmentos por solape de palabras con la pregunta."""
+    qwords = {w for w in re.findall(r"\w+", question.lower()) if len(w) > 2}
+    scored = []
+    for c in chunks:
+        cwords = {w for w in re.findall(r"\w+", (c.get("content") or "").lower()) if len(w) > 2}
+        overlap = len(qwords & cwords)
+        if overlap:
+            scored.append((overlap, c))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [c for _, c in scored[:top_k]]
+
+
+@router.post("/{tender_id}/ask")
+def ask(tender_id: str, payload: AskRequest, session: Session = Depends(get_session)) -> dict:
+    """Pregunta sobre el pliego. Usa tender-visual-rag si está configurado; si no, QA extractivo."""
+    tender = _get_or_404(session, tender_id)
+
+    if visual_rag_client.is_configured():
+        try:
+            res = visual_rag_client.ask(payload.question, tender.id, payload.top_k)
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"visual-rag falló: {exc}") from exc
+        return {
+            "backend": "visual-rag",
+            "answer": res.get("answer"),
+            "sources": res.get("sources") or res.get("hits") or [],
+        }
+
+    # Fallback extractivo sobre el texto del pliego (doc-service).
+    if not doc_client.is_configured():
+        raise HTTPException(503, "Ni visual-rag ni doc-service configurados.")
+    if not tender.url:
+        raise HTTPException(422, "La licitación no tiene URL de documento.")
+    try:
+        extraction = doc_client.extract(tender.url)
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"Extracción fallida: {exc}") from exc
+
+    top = _rank_chunks(payload.question, extraction.get("chunks", []), payload.top_k)
+    answer = top[0]["content"][:800] if top else None
+    return {
+        "backend": "extractive",
+        "answer": answer,
+        "sources": [
+            {"section": c.get("section"), "content": c.get("content", "")[:600]} for c in top
+        ],
+    }
 
 
 @router.get("/{tender_id}", response_model=TenderContract)

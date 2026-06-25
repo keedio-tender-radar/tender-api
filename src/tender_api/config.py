@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     analysis_service_url: str = ""
     analysis_token: str = ""  # X-Run-Token para /analyze si el servicio lo exige
 
+    # tender-visual-rag (/ask). Vacío = fallback a QA extractivo sobre el pliego.
+    visual_rag_url: str = ""
+    visual_rag_token: str = ""
+
     # Token que protege endpoints batch para el scheduler (p. ej. reanalyze-relevant).
     run_token: str = ""
 

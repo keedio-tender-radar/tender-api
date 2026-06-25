@@ -74,6 +74,13 @@ class TenderWithScore(BaseModel):
     score: ScoreContract | None = None
 
 
+class AskRequest(BaseModel):
+    """Pregunta sobre el pliego de una licitación."""
+
+    question: str
+    top_k: int = 5
+
+
 def tender_to_contract(row: models.Tender) -> TenderContract:
     return TenderContract(
         id=row.id,
