@@ -12,12 +12,13 @@ from fastapi.responses import Response
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 from tender_contracts import Tender as TenderContract
+from tender_contracts import TenderScore as ScoreContract
 
 from tender_api.config import settings
 from tender_api.database import get_session
 from tender_api.models import Tender, TenderScore
 from tender_api.schemas import TenderCreate, TenderWithScore, score_to_contract, tender_to_contract
-from tender_api.services import doc_client
+from tender_api.services import analysis_client, doc_client
 
 router = APIRouter(prefix="/api/tenders", tags=["tenders"])
 
@@ -280,6 +281,42 @@ def extract_document(tender_id: str, session: Session = Depends(get_session)) ->
     # Limita los fragmentos devueltos para no inflar la respuesta.
     result["chunks"] = (result.get("chunks") or [])[:5]
     return result
+
+
+@router.post("/{tender_id}/reanalyze", response_model=ScoreContract)
+def reanalyze(tender_id: str, session: Session = Depends(get_session)):
+    """Extrae el pliego y re-puntúa la licitación con su contenido (doc-service + ai-analysis)."""
+    tender = _get_or_404(session, tender_id)
+    if not doc_client.is_configured() or not analysis_client.is_configured():
+        raise HTTPException(503, "doc-service o analysis-service no configurados.")
+    if not tender.url:
+        raise HTTPException(422, "La licitación no tiene URL de documento.")
+
+    try:
+        extraction = doc_client.extract(tender.url)
+        chunks = extraction.get("chunks", [])
+        document_text = "\n".join(c.get("content", "") for c in chunks)[:20000]
+        result = analysis_client.analyze(
+            tender_to_contract(tender).model_dump(mode="json"), document_text
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"Re-análisis fallido: {exc}") from exc
+
+    sc = result["score"]
+    row = TenderScore(
+        tender_id=tender.id,
+        total=sc["total"],
+        breakdown=sc["breakdown"],
+        recommendation=sc["recommendation"],
+        hard_rules=sc.get("hard_rules", []),
+        factors=sc.get("factors", []),
+        model_version="1.0.0+doc" if result.get("used_document") else "1.0.0",
+    )
+    session.add(row)
+    tender.status = "scored"
+    session.commit()
+    session.refresh(row)
+    return score_to_contract(row)
 
 
 @router.get("/{tender_id}", response_model=TenderContract)

@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     # tender-document-service (extracción de pliegos). Vacío = función deshabilitada.
     doc_service_url: str = ""
 
+    # tender-ai-analysis-service (re-análisis con el pliego). Vacío = deshabilitado.
+    analysis_service_url: str = ""
+    analysis_token: str = ""  # X-Run-Token para /analyze si el servicio lo exige
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property
