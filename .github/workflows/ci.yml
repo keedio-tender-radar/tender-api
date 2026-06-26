@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      CONTRACTS_PAT: ${{ secrets.CONTRACTS_PAT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint (ruff)
+        run: ruff check src tests
+
+      # Los tests necesitan tender-contracts (repo privado). Si CONTRACTS_PAT está definido,
+      # se clona e instala; si no, se omiten (el lint siempre corre).
+      - name: Checkout shared contracts
+        if: ${{ env.CONTRACTS_PAT != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: keedio-tender-radar/tender-shared-contracts
+          token: ${{ env.CONTRACTS_PAT }}
+          path: _contracts
+
+      - name: Tests (pytest)
+        if: ${{ env.CONTRACTS_PAT != '' }}
+        run: |
+          pip install -e ./_contracts
+          pip install -e .
+          pip install pytest pytest-asyncio
+          pytest -q
