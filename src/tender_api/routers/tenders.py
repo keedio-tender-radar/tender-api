@@ -23,6 +23,7 @@ from tender_api.models import (
     TenderAction,
     TenderDecision,
     TenderDocument,
+    TenderNote,
     TenderScore,
 )
 from tender_api.schemas import (
@@ -338,6 +339,35 @@ def stats(session: Session = Depends(get_session)) -> dict:
     }
 
 
+@router.get("/stats/market")
+def market_stats(session: Session = Depends(get_session)) -> dict:
+    """Inteligencia de mercado: top órganos, volumen mensual y presupuesto medio por fuente."""
+    tenders = session.scalars(select(Tender).where(Tender.duplicate_of.is_(None))).all()
+
+    by_buyer: dict[str, int] = {}
+    by_month: dict[str, int] = {}
+    budget_by_source: dict[str, list[float]] = {}
+    for t in tenders:
+        if t.buyer:
+            by_buyer[t.buyer] = by_buyer.get(t.buyer, 0) + 1
+        if t.created_at:
+            ym = t.created_at.strftime("%Y-%m")
+            by_month[ym] = by_month.get(ym, 0) + 1
+        if t.budget_amount:
+            budget_by_source.setdefault(t.source, []).append(t.budget_amount)
+
+    top_buyers = dict(sorted(by_buyer.items(), key=lambda kv: kv[1], reverse=True)[:8])
+    months = dict(sorted(by_month.items())[-6:])
+    avg_budget_by_source = {
+        s: round(sum(v) / len(v)) for s, v in budget_by_source.items() if v
+    }
+    return {
+        "top_buyers": top_buyers,
+        "by_month": months,
+        "avg_budget_by_source": avg_budget_by_source,
+    }
+
+
 @router.post("/{tender_id}/extract")
 def extract_document(tender_id: str, session: Session = Depends(get_session)) -> dict:
     """Extrae el texto del documento del anuncio vía tender-document-service."""
@@ -586,6 +616,81 @@ def mark_alerted(tender_id: str, session: Session = Depends(get_session)) -> dic
     session.add(TenderAction(tender_id=tender_id, action="alerted", actor="alerts"))
     session.commit()
     return {"tender_id": tender_id, "alerted": True}
+
+
+@router.post("/{tender_id}/mark-reminded", status_code=201)
+def mark_reminded(tender_id: str, session: Session = Depends(get_session)) -> dict:
+    """Marca una licitación como ya recordada (cierre próximo). Uso interno del bot."""
+    _get_or_404(session, tender_id)
+    session.add(TenderAction(tender_id=tender_id, action="reminded", actor="reminders"))
+    session.commit()
+    return {"tender_id": tender_id, "reminded": True}
+
+
+@router.get("/closing-soon", response_model=list[TenderWithScore])
+def closing_soon(
+    session: Session = Depends(get_session),
+    days: int = Query(default=7, ge=1, le=60),
+):
+    """Licitaciones en seguimiento (interested/partner) que cierran pronto y sin recordatorio."""
+    now = datetime.now(UTC)
+    limit_dt = now + timedelta(days=days)
+    rows = session.scalars(
+        select(Tender)
+        .where(Tender.duplicate_of.is_(None))
+        .where(Tender.status.in_(["interested", "partner"]))
+        .where(Tender.deadline.is_not(None))
+        .where(Tender.deadline >= now)
+        .where(Tender.deadline <= limit_dt)
+        .order_by(Tender.deadline.asc())
+    ).all()
+    out = []
+    for t in rows:
+        reminded = session.scalar(
+            select(TenderAction).where(
+                TenderAction.tender_id == t.id, TenderAction.action == "reminded"
+            )
+        )
+        if reminded:
+            continue
+        score = _latest_score(session, t.id)
+        out.append(
+            TenderWithScore(
+                tender=tender_to_contract(t),
+                score=score_to_contract(score) if score else None,
+            )
+        )
+    return out
+
+
+@router.post("/{tender_id}/notes", status_code=201)
+def add_note(tender_id: str, payload: dict, session: Session = Depends(get_session)) -> dict:
+    """Añade una nota/comentario del equipo a la licitación."""
+    _get_or_404(session, tender_id)
+    body = (payload.get("body") or "").strip()
+    if not body:
+        raise HTTPException(422, "La nota no puede estar vacía.")
+    row = TenderNote(tender_id=tender_id, author=payload.get("author"), body=body)
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return {"id": row.id, "author": row.author, "body": row.body,
+            "created_at": row.created_at.isoformat()}
+
+
+@router.get("/{tender_id}/notes")
+def list_notes(tender_id: str, session: Session = Depends(get_session)) -> list[dict]:
+    """Lista las notas de la licitación (más recientes primero)."""
+    _get_or_404(session, tender_id)
+    rows = session.scalars(
+        select(TenderNote)
+        .where(TenderNote.tender_id == tender_id)
+        .order_by(TenderNote.created_at.desc())
+    ).all()
+    return [
+        {"id": r.id, "author": r.author, "body": r.body, "created_at": r.created_at.isoformat()}
+        for r in rows
+    ]
 
 
 @router.get("/pending-alerts", response_model=list[TenderWithScore])

@@ -161,6 +161,18 @@ class GeneratedDocument(Base):
     tender: Mapped[Tender] = relationship(back_populates="documents")
 
 
+class TenderNote(Base):
+    """Nota/comentario del equipo sobre una licitación (colaboración)."""
+
+    __tablename__ = "tender_notes"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    tender_id: Mapped[str] = mapped_column(ForeignKey("tenders.id"), index=True)
+    author: Mapped[str | None] = mapped_column(String, nullable=True)
+    body: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class TenderAction(Base):
     __tablename__ = "tender_actions"
 
