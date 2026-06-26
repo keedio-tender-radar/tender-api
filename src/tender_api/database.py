@@ -1,9 +1,16 @@
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from tender_api.config import settings
+
+# Columnas añadidas a tablas YA existentes: create_all no las crea, así que se añaden aquí
+# de forma idempotente (Postgres soporta ADD COLUMN IF NOT EXISTS).
+_COLUMN_MIGRATIONS = [
+    ("tenders", "duplicate_of", "VARCHAR"),
+    ("tender_scores", "summary", "VARCHAR"),
+]
 
 
 class Base(DeclarativeBase):
@@ -31,10 +38,22 @@ def init_db() -> None:
 
     from tender_api import models  # noqa: F401  (registra los modelos)
 
+    log = logging.getLogger("tender_api")
     try:
         Base.metadata.create_all(bind=engine)
     except Exception as exc:  # noqa: BLE001
-        logging.getLogger("tender_api").warning("init_db: create_all falló: %s", exc)
+        log.warning("init_db: create_all falló: %s", exc)
+
+    # Auto-migración de columnas nuevas en tablas existentes (solo Postgres; SQLite ya las crea).
+    if not settings.database_url.startswith("sqlite"):
+        for table, column, coltype in _COLUMN_MIGRATIONS:
+            try:
+                with engine.begin() as conn:
+                    conn.execute(
+                        text(f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {coltype}')
+                    )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("init_db: migración %s.%s falló: %s", table, column, exc)
 
 
 def get_session() -> Generator[Session, None, None]:
