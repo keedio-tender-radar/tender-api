@@ -17,7 +17,7 @@ from tender_contracts import TenderScore as ScoreContract
 
 from tender_api.config import settings
 from tender_api.database import get_session
-from tender_api.models import Tender, TenderDecision, TenderScore
+from tender_api.models import Tender, TenderAction, TenderDecision, TenderScore
 from tender_api.schemas import (
     AskRequest,
     DecisionCreate,
@@ -510,6 +510,71 @@ def get_learning_insights(tender_id: str, session: Session = Depends(get_session
     """Compara con decisiones históricas similares (CPV/órgano/presupuesto)."""
     tender = _get_or_404(session, tender_id)
     return learning_insights(session, tender)
+
+
+# Estructura estándar de la carpeta de expediente (cuando una licitación interesa).
+_WORKSPACE_FOLDERS = [
+    "00_originales",
+    "01_analisis",
+    "02_borradores_oferta",
+    "03_administrativo",
+    "04_tecnico",
+    "05_economico",
+    "99_presentacion",
+]
+_REQUIRED_DOCS = [
+    "Informe Go/No-Go",
+    "Resumen ejecutivo",
+    "Memoria técnica",
+    "Matriz de cumplimiento",
+    "Checklist administrativo",
+    "Declaración responsable",
+    "Solvencia técnica",
+    "Solvencia económica",
+    "Oferta económica",
+    "Anexos y modelos firmados",
+]
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")[:60] or "expediente"
+
+
+@router.post("/{tender_id}/mark-interesting")
+def mark_interesting(tender_id: str, session: Session = Depends(get_session)) -> dict:
+    """Marca la licitación como interesante y devuelve el manifiesto de su carpeta de expediente.
+
+    El almacenamiento durable de ficheros es futuro (MinIO/S3); aquí se fija el estado, se
+    registra la acción y se devuelve la estructura de carpeta + documentos a preparar.
+    """
+    tender = _get_or_404(session, tender_id)
+    tender.status = "interested"
+    session.add(
+        TenderAction(tender_id=tender.id, action="interested", actor="dashboard",
+                     note="mark-interesting")
+    )
+    session.commit()
+    workspace = f"{tender.source_id}-{_slug(tender.title)}"
+    return {
+        "tender_id": tender.id,
+        "status": tender.status,
+        "workspace": workspace,
+        "folders": _WORKSPACE_FOLDERS,
+        "required_documents": _REQUIRED_DOCS,
+        "note": "Carpeta de expediente lógica; el almacenamiento de ficheros (MinIO/S3) es futuro.",
+    }
+
+
+@router.get("/{tender_id}/required-documents")
+def required_documents(tender_id: str, session: Session = Depends(get_session)) -> dict:
+    """Documentos que típicamente exige la oferta (requiere revisión humana antes de presentar)."""
+    tender = _get_or_404(session, tender_id)
+    return {
+        "external_tender_id": tender.source_id,
+        "required_offer_documents": _REQUIRED_DOCS,
+        "status": "draft_requirements",
+        "note": "Lista estándar; ajústala según el pliego concreto antes de presentar.",
+    }
 
 
 @router.get("/{tender_id}", response_model=TenderContract)
