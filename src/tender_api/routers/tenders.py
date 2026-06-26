@@ -519,6 +519,40 @@ def get_learning_insights(tender_id: str, session: Session = Depends(get_session
     return learning_insights(session, tender)
 
 
+@router.post("/{tender_id}/mark-alerted", status_code=201)
+def mark_alerted(tender_id: str, session: Session = Depends(get_session)) -> dict:
+    """Marca una licitación como ya alertada (evita re-alertar). Uso interno del bot."""
+    _get_or_404(session, tender_id)
+    session.add(TenderAction(tender_id=tender_id, action="alerted", actor="alerts"))
+    session.commit()
+    return {"tender_id": tender_id, "alerted": True}
+
+
+@router.get("/pending-alerts", response_model=list[TenderWithScore])
+def pending_alerts(
+    session: Session = Depends(get_session), limit: int = Query(default=10, ge=1, le=50)
+):
+    """Oportunidades GO aún no alertadas (sin acción 'alerted'). Para el push inmediato."""
+    out: list[TenderWithScore] = []
+    for t in session.scalars(select(Tender)).all():
+        score = _latest_score(session, t.id)
+        if not score or score.recommendation != "go":
+            continue
+        already = session.scalar(
+            select(TenderAction).where(
+                TenderAction.tender_id == t.id, TenderAction.action == "alerted"
+            )
+        )
+        if already:
+            continue
+        out.append(
+            TenderWithScore(tender=tender_to_contract(t), score=score_to_contract(score))
+        )
+        if len(out) >= limit:
+            break
+    return out
+
+
 # Estructura estándar de la carpeta de expediente (cuando una licitación interesa).
 _WORKSPACE_FOLDERS = [
     "00_originales",

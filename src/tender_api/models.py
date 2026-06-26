@@ -109,6 +109,22 @@ class TenderDecision(Base):
     tender: Mapped[Tender] = relationship(back_populates="decisions")
 
 
+class ScoringProfile(Base):
+    """Perfil Keedio editable (keywords/CPV/áreas) — fila única, sin redeploy."""
+
+    __tablename__ = "scoring_profile"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default="default")
+    keywords_positive: Mapped[list] = mapped_column(JSON, default=list)
+    keywords_negative: Mapped[list] = mapped_column(JSON, default=list)
+    cpv_preferred: Mapped[list] = mapped_column(JSON, default=list)
+    cpv_excluded: Mapped[list] = mapped_column(JSON, default=list)
+    areas: Mapped[list] = mapped_column(JSON, default=list)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
 class TenderDocument(Base):
     """Binario original del expediente (PCAP/PPT/anexos) almacenado en S3/MinIO."""
 
