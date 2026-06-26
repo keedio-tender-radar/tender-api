@@ -400,6 +400,24 @@ def create_daily_snapshot(
     return {"date": today.isoformat(), "number": number, "count": len(items), "items": items}
 
 
+@router.get("/daily-snapshots")
+def list_daily_snapshots(
+    session: Session = Depends(get_session), limit: int = Query(default=14, ge=1, le=90)
+) -> list[dict]:
+    """Histórico de fotos diarias (fecha, conteo, items) — para comparar días."""
+    rows = session.scalars(
+        select(DailySnapshot).order_by(DailySnapshot.snapshot_date.desc()).limit(limit)
+    ).all()
+    return [
+        {
+            "date": r.snapshot_date.isoformat(),
+            "count": r.count,
+            "items": r.items or [],
+        }
+        for r in rows
+    ]
+
+
 @router.get("/daily-snapshot")
 def get_daily_snapshot(session: Session = Depends(get_session)) -> dict:
     """Última foto diaria persistida (web)."""
@@ -442,6 +460,26 @@ def market_stats(session: Session = Depends(get_session)) -> dict:
         "by_month": months,
         "avg_budget_by_source": avg_budget_by_source,
     }
+
+
+@router.get("/stats/market.csv")
+def market_csv(session: Session = Depends(get_session)) -> Response:
+    """Exporta la inteligencia de mercado a CSV (tipo;clave;valor)."""
+    m = market_stats(session)
+    buf = io.StringIO()
+    writer = csv.writer(buf, delimiter=";")
+    writer.writerow(["tipo", "clave", "valor"])
+    for k, v in m["top_buyers"].items():
+        writer.writerow(["organo", k, v])
+    for k, v in m["by_month"].items():
+        writer.writerow(["volumen_mes", k, v])
+    for k, v in m["avg_budget_by_source"].items():
+        writer.writerow(["presupuesto_medio_fuente", k, v])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="mercado.csv"'},
+    )
 
 
 @router.post("/{tender_id}/extract")

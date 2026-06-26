@@ -32,3 +32,24 @@ def test_daily_snapshot_token(client, monkeypatch):
     assert client.post(
         "/api/tenders/daily-snapshot", headers={"X-Run-Token": "secret"}
     ).status_code == 200
+
+
+def test_daily_snapshots_history(client):
+    from datetime import UTC, datetime, timedelta
+    future = (datetime.now(UTC) + timedelta(days=10)).isoformat()
+    t = make_tender(client, source_id="H1", deadline=future)
+    bd = full_breakdown()
+    client.put(f"/api/tenders/{t['id']}/score",
+               json={"total": sum(bd.values()), "breakdown": bd, "recommendation": "go"})
+    client.post("/api/tenders/daily-snapshot")
+    hist = client.get("/api/tenders/daily-snapshots?limit=14").json()
+    assert len(hist) >= 1
+    assert hist[0]["count"] >= 1 and "items" in hist[0]
+
+
+def test_market_csv(client):
+    make_tender(client, source_id="MC1", buyer="Diputacion", budget_amount=300000.0)
+    r = client.get("/api/tenders/stats/market.csv")
+    assert r.status_code == 200
+    assert "text/csv" in r.headers["content-type"]
+    assert "tipo;clave;valor" in r.text
