@@ -754,6 +754,37 @@ def add_note(tender_id: str, payload: dict, session: Session = Depends(get_sessi
             "created_at": row.created_at.isoformat()}
 
 
+@router.get("/{tender_id}/activity")
+def activity(tender_id: str, session: Session = Depends(get_session)) -> list[dict]:
+    """Historial unificado (acciones + decisiones + notas) en orden cronológico inverso."""
+    _get_or_404(session, tender_id)
+    events: list[dict] = []
+    for a in session.scalars(
+        select(TenderAction).where(TenderAction.tender_id == tender_id)
+    ).all():
+        events.append({
+            "kind": "action", "at": a.created_at.isoformat(),
+            "text": a.action, "actor": a.actor, "detail": a.note,
+        })
+    for d in session.scalars(
+        select(TenderDecision).where(TenderDecision.tender_id == tender_id)
+    ).all():
+        outcome = f" → {d.outcome}" if d.outcome else ""
+        events.append({
+            "kind": "decision", "at": d.created_at.isoformat(),
+            "text": f"{d.decision}{outcome}", "actor": None, "detail": d.reason,
+        })
+    for n in session.scalars(
+        select(TenderNote).where(TenderNote.tender_id == tender_id)
+    ).all():
+        events.append({
+            "kind": "note", "at": n.created_at.isoformat(),
+            "text": n.body, "actor": n.author, "detail": None,
+        })
+    events.sort(key=lambda e: e["at"], reverse=True)
+    return events
+
+
 @router.get("/{tender_id}/notes")
 def list_notes(tender_id: str, session: Session = Depends(get_session)) -> list[dict]:
     """Lista las notas de la licitación (más recientes primero)."""

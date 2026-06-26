@@ -37,3 +37,19 @@ def test_market_stats(client):
     assert m["top_buyers"]["Servicio de Salud"] == 2
     assert "placsp" in m["avg_budget_by_source"]
     assert m["by_month"]
+
+
+def test_activity_timeline(client):
+    t = make_tender(client)
+    client.post(f"/api/tenders/{t['id']}/actions", json={"action": "interested", "actor": "RJ"})
+    client.post(
+        f"/api/tenders/{t['id']}/decision",
+        json={"decision": "GO", "outcome": "presentada", "reason": "Buen encaje"},
+    )
+    client.post(f"/api/tenders/{t['id']}/notes", json={"body": "Llamar al órgano", "author": "RJ"})
+    act = client.get(f"/api/tenders/{t['id']}/activity").json()
+    kinds = {e["kind"] for e in act}
+    assert kinds == {"action", "decision", "note"}
+    assert len(act) == 3
+    # orden cronológico inverso
+    assert act == sorted(act, key=lambda e: e["at"], reverse=True)
