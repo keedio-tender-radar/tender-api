@@ -24,3 +24,13 @@ def test_no_dedupe_different_cpv(client):
     res = client.get("/api/tenders/search?limit=100").json()
     ids = {x["tender"]["id"] for x in res}
     assert a["id"] in ids and b["id"] in ids  # CPV distinto → no son duplicadas
+
+
+def test_duplicates_endpoint(client):
+    placsp = make_tender(client, source="placsp", source_id="C1",
+                         budget_amount=730000.0, cpv=["48000000"])
+    ted = make_tender(client, source="ted", source_id="D1",
+                      budget_amount=730000.0, cpv=["48000000"])
+    dups = client.get(f"/api/tenders/{placsp['id']}/duplicates").json()
+    assert [d["id"] for d in dups] == [ted["id"]]
+    assert dups[0]["source"] == "ted"

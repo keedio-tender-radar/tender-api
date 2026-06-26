@@ -544,6 +544,19 @@ def record_decision(
     return {"id": row.id, "tender_id": tender_id, "decision": row.decision}
 
 
+@router.get("/{tender_id}/duplicates")
+def list_duplicates(tender_id: str, session: Session = Depends(get_session)) -> list[dict]:
+    """Otras publicaciones de la misma licitación (otras fuentes) marcadas como duplicadas."""
+    _get_or_404(session, tender_id)
+    rows = session.scalars(
+        select(Tender).where(Tender.duplicate_of == tender_id)
+    ).all()
+    return [
+        {"id": r.id, "source": r.source, "source_id": r.source_id, "url": r.url, "title": r.title}
+        for r in rows
+    ]
+
+
 @router.get("/{tender_id}/analysis")
 def get_analysis(tender_id: str, session: Session = Depends(get_session)) -> dict:
     """Resumen y factores del análisis IA (del último score), para mostrar en la ficha."""
