@@ -204,12 +204,19 @@ def search_tenders(
 def top_tenders(
     session: Session = Depends(get_session),
     limit: int = Query(default=5, ge=1, le=50),
+    include_expired: bool = Query(default=False),
 ):
-    """Mejores oportunidades por último score (desc). Solo licitaciones ya puntuadas."""
+    """Mejores oportunidades ACTIVAS por último score (desc). Excluye vencidas por defecto.
+
+    Web (Radar) y Telegram (digest) consumen este mismo endpoint → la misma foto diaria.
+    """
+    now = datetime.now(UTC)
     scored = []
     for tender in session.scalars(
         select(Tender).where(Tender.duplicate_of.is_(None))
     ).all():
+        if not include_expired and tender.deadline and _aware(tender.deadline) < now:
+            continue  # licitación vencida → fuera del ranking de activas
         score = _latest_score(session, tender.id)
         if score is not None:
             scored.append((tender, score))

@@ -77,3 +77,18 @@ def test_search_filters(client):
     # contracting_body filtra por órgano
     dip = client.get("/api/tenders/search?contracting_body=diputacion").json()
     assert {x["tender"]["id"] for x in dip} == {a["id"]}
+
+
+def test_top_excludes_expired(client):
+    from datetime import UTC, datetime, timedelta
+    past = (datetime.now(UTC) - timedelta(days=2)).isoformat()
+    future = (datetime.now(UTC) + timedelta(days=20)).isoformat()
+    exp = make_tender(client, source_id="EXP", deadline=past)
+    act = make_tender(client, source_id="ACT", deadline=future)
+    _put_score(client, exp["id"], full_breakdown(), "go")
+    _put_score(client, act["id"], full_breakdown(), "go")
+    ids = {x["tender"]["id"] for x in client.get("/api/tenders/top?limit=50").json()}
+    assert act["id"] in ids and exp["id"] not in ids
+    # include_expired=true las incluye
+    res2 = client.get("/api/tenders/top?limit=50&include_expired=true").json()
+    assert exp["id"] in {x["tender"]["id"] for x in res2}
