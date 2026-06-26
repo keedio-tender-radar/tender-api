@@ -8,7 +8,7 @@ import re
 from datetime import UTC, datetime, timedelta
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -22,6 +22,7 @@ from tender_api.models import (
     Tender,
     TenderAction,
     TenderDecision,
+    TenderDocument,
     TenderScore,
 )
 from tender_api.schemas import (
@@ -32,7 +33,7 @@ from tender_api.schemas import (
     score_to_contract,
     tender_to_contract,
 )
-from tender_api.services import analysis_client, doc_client, semaphore, visual_rag_client
+from tender_api.services import analysis_client, doc_client, semaphore, storage, visual_rag_client
 from tender_api.services.learning import learning_insights
 
 router = APIRouter(prefix="/api/tenders", tags=["tenders"])
@@ -571,13 +572,8 @@ def mark_interesting(tender_id: str, session: Session = Depends(get_session)) ->
     }
 
 
-@router.post("/{tender_id}/generate-offer-drafts")
-def generate_offer_drafts(tender_id: str, session: Session = Depends(get_session)) -> dict:
-    """Genera y persiste los borradores de oferta (Go/No-Go, memoria, matriz, checklist)."""
-    tender = _get_or_404(session, tender_id)
-    if not analysis_client.is_configured():
-        raise HTTPException(503, "analysis-service no configurado.")
-
+def _generate_and_store_drafts(session: Session, tender: Tender) -> list[GeneratedDocument]:
+    """Genera (extrae pliego → ai-analysis) y persiste los borradores, reemplazando los previos."""
     document_text = None
     if doc_client.is_configured() and tender.url:
         try:
@@ -586,33 +582,108 @@ def generate_offer_drafts(tender_id: str, session: Session = Depends(get_session
         except httpx.HTTPError:
             document_text = None
 
-    score = _latest_score(session, tender_id)
+    score = _latest_score(session, tender.id)
     score_payload = score_to_contract(score).model_dump(mode="json") if score else None
-    try:
-        result = analysis_client.generate_drafts(
-            tender_to_contract(tender).model_dump(mode="json"), document_text, score_payload
-        )
-    except httpx.HTTPError as exc:
-        raise HTTPException(502, f"Generación de borradores fallida: {exc}") from exc
+    result = analysis_client.generate_drafts(
+        tender_to_contract(tender).model_dump(mode="json"), document_text, score_payload
+    )
 
-    # Reemplaza los borradores previos por el nuevo conjunto.
     for old in session.scalars(
-        select(GeneratedDocument).where(GeneratedDocument.tender_id == tender_id)
+        select(GeneratedDocument).where(GeneratedDocument.tender_id == tender.id)
     ).all():
         session.delete(old)
-    out = []
+    rows = []
     for d in result.get("drafts", []):
         row = GeneratedDocument(
-            tender_id=tender_id,
+            tender_id=tender.id,
             kind=d.get("kind", "doc"),
             title=d.get("title", ""),
             content=d.get("content", ""),
             generated_by="llm" if document_text else "rule-based",
         )
         session.add(row)
-        out.append({"kind": row.kind, "title": row.title})
+        rows.append(row)
     session.commit()
-    return {"tender_id": tender_id, "generated": out, "count": len(out)}
+    return rows
+
+
+@router.post("/{tender_id}/generate-offer-drafts")
+def generate_offer_drafts(tender_id: str, session: Session = Depends(get_session)) -> dict:
+    """Genera y persiste los borradores de oferta (Go/No-Go, memoria, matriz, checklist)."""
+    tender = _get_or_404(session, tender_id)
+    if not analysis_client.is_configured():
+        raise HTTPException(503, "analysis-service no configurado.")
+    try:
+        rows = _generate_and_store_drafts(session, tender)
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"Generación de borradores fallida: {exc}") from exc
+    return {
+        "tender_id": tender_id,
+        "generated": [{"kind": r.kind, "title": r.title} for r in rows],
+        "count": len(rows),
+    }
+
+
+# Carpeta destino de cada borrador dentro del expediente.
+_DRAFT_FOLDER = {
+    "go_no_go": "01_analisis",
+    "resumen_ejecutivo": "01_analisis",
+    "memoria_tecnica": "04_tecnico",
+    "matriz_cumplimiento": "02_borradores_oferta",
+    "checklist_administrativo": "03_administrativo",
+}
+_PENDING_HUMAN = [
+    "Firma electrónica y certificados (ROLECE, DEUC, poderes)",
+    "Solvencias acreditadas (técnica y económica)",
+    "Oferta económica en el modelo oficial del pliego",
+    "Revisión humana completa antes de presentar",
+]
+
+
+@router.post("/{tender_id}/prepare-submission-package")
+def prepare_submission_package(tender_id: str, session: Session = Depends(get_session)) -> dict:
+    """Empaqueta los borradores en las carpetas del expediente y devuelve el manifiesto.
+
+    Genera los borradores si aún no existen. El almacenamiento de binarios es futuro (MinIO/S3).
+    """
+    tender = _get_or_404(session, tender_id)
+    if not analysis_client.is_configured():
+        raise HTTPException(503, "analysis-service no configurado.")
+
+    rows = session.scalars(
+        select(GeneratedDocument).where(GeneratedDocument.tender_id == tender_id)
+    ).all()
+    if not rows:
+        try:
+            rows = _generate_and_store_drafts(session, tender)
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"Generación de borradores fallida: {exc}") from exc
+
+    package: dict[str, list[str]] = {f: [] for f in _WORKSPACE_FOLDERS}
+    for r in rows:
+        package[_DRAFT_FOLDER.get(r.kind, "02_borradores_oferta")].append(f"{r.kind}.md")
+
+    tender.status = "interested"
+    session.commit()
+    manifest_lines = [f"# Expediente {tender.source_id} — {tender.title}", ""]
+    for folder in _WORKSPACE_FOLDERS:
+        manifest_lines.append(f"## {folder}")
+        files = package[folder]
+        if files:
+            manifest_lines.extend(f"- {f}" for f in files)
+        else:
+            manifest_lines.append("- (vacío)")
+    return {
+        "tender_id": tender_id,
+        "workspace": f"{tender.source_id}-{_slug(tender.title)}",
+        "package": package,
+        "documents": len(rows),
+        "required_documents": _REQUIRED_DOCS,
+        "pending_human": _PENDING_HUMAN,
+        "manifest_md": "\n".join(manifest_lines),
+        "note": "Borradores listos en el expediente. Subida de binarios y presentación: "
+        "revisión humana + MinIO/S3.",
+    }
 
 
 @router.get("/{tender_id}/generated-documents")
@@ -634,6 +705,56 @@ def generated_documents(tender_id: str, session: Session = Depends(get_session))
         }
         for r in rows
     ]
+
+
+@router.post("/{tender_id}/documents/upload", status_code=201)
+async def upload_document(
+    tender_id: str,
+    file: UploadFile = File(...),
+    folder: str = Form(default="00_originales"),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Sube un binario original (PCAP/PPT/anexo) al expediente en S3/MinIO."""
+    tender = _get_or_404(session, tender_id)
+    if not storage.is_configured():
+        raise HTTPException(503, "Almacenamiento S3/MinIO no configurado (modo solo-lógico).")
+    data = await file.read()
+    key = f"{tender.id}/{folder}/{file.filename}"
+    try:
+        storage.put_bytes(key, data, file.content_type or "application/octet-stream")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"Subida fallida: {exc}") from exc
+    row = TenderDocument(
+        tender_id=tender.id,
+        folder=folder,
+        filename=file.filename or "documento",
+        storage_key=key,
+        content_type=file.content_type,
+        size=len(data),
+    )
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return {"id": row.id, "filename": row.filename, "folder": row.folder, "size": row.size}
+
+
+@router.get("/{tender_id}/documents")
+def list_documents(tender_id: str, session: Session = Depends(get_session)) -> list[dict]:
+    """Lista los binarios del expediente (con URL prefirmada si el almacenamiento está activo)."""
+    _get_or_404(session, tender_id)
+    rows = session.scalars(
+        select(TenderDocument).where(TenderDocument.tender_id == tender_id)
+    ).all()
+    out = []
+    for r in rows:
+        item = {"id": r.id, "filename": r.filename, "folder": r.folder, "size": r.size}
+        if storage.is_configured():
+            try:
+                item["url"] = storage.presigned_get(r.storage_key)
+            except Exception:  # noqa: BLE001
+                item["url"] = None
+        out.append(item)
+    return out
 
 
 @router.get("/{tender_id}/required-documents")

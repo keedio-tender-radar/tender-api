@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     # Token que protege endpoints batch para el scheduler (p. ej. reanalyze-relevant).
     run_token: str = ""
 
+    # Almacenamiento de binarios del expediente (S3/MinIO). Vacío = deshabilitado (solo lógico).
+    s3_endpoint_url: str = ""  # p. ej. https://minio.tu-infra:9000 (vacío = AWS S3)
+    s3_bucket: str = ""
+    s3_access_key: str = ""
+    s3_secret_key: str = ""
+    s3_region: str = "us-east-1"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property

@@ -12,6 +12,8 @@ dependencies = [
   "pydantic-settings>=2.5",
   "psycopg[binary]>=3.2",
   "httpx>=0.27",
+  "python-multipart>=0.0.9",
+  "boto3>=1.34",
   # Contratos compartidos. En dev: pip install -e ../tender-shared-contracts
   # En despliegue: instalar desde git (repo privado → requiere credenciales).
   "tender-contracts",

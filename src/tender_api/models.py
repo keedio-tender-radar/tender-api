@@ -15,6 +15,15 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from tender_api.database import Base
 
+__all__ = [
+    "Tender",
+    "TenderScore",
+    "TenderAction",
+    "TenderDecision",
+    "TenderDocument",
+    "GeneratedDocument",
+]
+
 
 def _uuid() -> str:
     return str(uuid.uuid4())
@@ -58,6 +67,9 @@ class Tender(Base):
     documents: Mapped[list[GeneratedDocument]] = relationship(
         back_populates="tender", cascade="all, delete-orphan"
     )
+    files: Mapped[list[TenderDocument]] = relationship(
+        back_populates="tender", cascade="all, delete-orphan"
+    )
 
 
 class TenderScore(Base):
@@ -95,6 +107,23 @@ class TenderDecision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     tender: Mapped[Tender] = relationship(back_populates="decisions")
+
+
+class TenderDocument(Base):
+    """Binario original del expediente (PCAP/PPT/anexos) almacenado en S3/MinIO."""
+
+    __tablename__ = "tender_documents"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    tender_id: Mapped[str] = mapped_column(ForeignKey("tenders.id"), index=True)
+    folder: Mapped[str] = mapped_column(String, default="00_originales")
+    filename: Mapped[str] = mapped_column(String)
+    storage_key: Mapped[str] = mapped_column(String)
+    content_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    tender: Mapped[Tender] = relationship(back_populates="files")
 
 
 class GeneratedDocument(Base):
