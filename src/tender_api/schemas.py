@@ -49,6 +49,7 @@ class ScoreUpsert(BaseModel):
     recommendation: Recommendation
     hard_rules: list[str] = Field(default_factory=list)
     factors: list[ScoreFactor] = Field(default_factory=list)
+    summary: str | None = None
     model_version: str = "1.0.0"
 
 

@@ -84,6 +84,7 @@ class TenderScore(Base):
     recommendation: Mapped[str] = mapped_column(String, index=True)
     hard_rules: Mapped[list] = mapped_column(JSON, default=list)
     factors: Mapped[list] = mapped_column(JSON, default=list)
+    summary: Mapped[str | None] = mapped_column(String, nullable=True)  # resumen del análisis IA
     model_version: Mapped[str] = mapped_column(String, default="1.0.0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 

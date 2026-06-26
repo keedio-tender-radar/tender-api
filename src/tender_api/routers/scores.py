@@ -32,6 +32,7 @@ def put_score(tender_id: str, payload: ScoreUpsert, session: Session = Depends(g
         recommendation=payload.recommendation.value,
         hard_rules=list(payload.hard_rules),
         factors=[f.model_dump() for f in payload.factors],
+        summary=payload.summary,
         model_version=payload.model_version,
     )
     session.add(row)

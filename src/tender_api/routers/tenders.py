@@ -371,6 +371,7 @@ def _reanalyze_one(session: Session, tender: Tender) -> TenderScore:
         recommendation=sc["recommendation"],
         hard_rules=sc.get("hard_rules", []),
         factors=sc.get("factors", []),
+        summary=(result.get("analysis") or {}).get("summary"),
         model_version="1.0.0+doc" if result.get("used_document") else "1.0.0",
     )
     session.add(row)
@@ -541,6 +542,21 @@ def record_decision(
     session.commit()
     session.refresh(row)
     return {"id": row.id, "tender_id": tender_id, "decision": row.decision}
+
+
+@router.get("/{tender_id}/analysis")
+def get_analysis(tender_id: str, session: Session = Depends(get_session)) -> dict:
+    """Resumen y factores del análisis IA (del último score), para mostrar en la ficha."""
+    _get_or_404(session, tender_id)
+    score = _latest_score(session, tender_id)
+    if not score:
+        return {"summary": None, "factors": [], "recommendation": None}
+    return {
+        "summary": score.summary,
+        "factors": score.factors or [],
+        "recommendation": score.recommendation,
+        "model_version": score.model_version,
+    }
 
 
 @router.get("/{tender_id}/learning-insights")
@@ -749,6 +765,30 @@ def prepare_submission_package(tender_id: str, session: Session = Depends(get_se
         "note": "Borradores listos en el expediente. Subida de binarios y presentación: "
         "revisión humana + MinIO/S3.",
     }
+
+
+@router.get("/{tender_id}/package.md")
+def download_package_md(tender_id: str, session: Session = Depends(get_session)) -> Response:
+    """Descarga todos los borradores del expediente concatenados en un único Markdown."""
+    tender = _get_or_404(session, tender_id)
+    rows = session.scalars(
+        select(GeneratedDocument)
+        .where(GeneratedDocument.tender_id == tender_id)
+        .order_by(GeneratedDocument.created_at)
+    ).all()
+    parts = [f"# Paquete de oferta — {tender.source_id} · {tender.title}", ""]
+    if not rows:
+        parts.append("_Sin borradores generados aún._")
+    for r in rows:
+        parts.append(f"\n\n---\n\n{r.content}")
+    md = "\n".join(parts)
+    return Response(
+        content=md,
+        media_type="text/markdown; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{_slug(tender.title)}-paquete.md"'
+        },
+    )
 
 
 @router.get("/{tender_id}/generated-documents")
