@@ -27,3 +27,14 @@ def analyze(tender: dict, document_text: str | None) -> dict:
         resp = client.post("/analyze", json={"tender": tender, "document_text": document_text})
         resp.raise_for_status()
         return resp.json()
+
+
+def generate_drafts(tender: dict, document_text: str | None, score: dict | None) -> dict:
+    """Devuelve {drafts:[{kind,title,content}]} con los borradores de oferta."""
+    with _client() as client:
+        resp = client.post(
+            "/generate-drafts",
+            json={"tender": tender, "document_text": document_text, "score": score},
+        )
+        resp.raise_for_status()
+        return resp.json()

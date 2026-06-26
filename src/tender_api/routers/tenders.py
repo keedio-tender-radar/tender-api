@@ -17,7 +17,13 @@ from tender_contracts import TenderScore as ScoreContract
 
 from tender_api.config import settings
 from tender_api.database import get_session
-from tender_api.models import Tender, TenderAction, TenderDecision, TenderScore
+from tender_api.models import (
+    GeneratedDocument,
+    Tender,
+    TenderAction,
+    TenderDecision,
+    TenderScore,
+)
 from tender_api.schemas import (
     AskRequest,
     DecisionCreate,
@@ -563,6 +569,71 @@ def mark_interesting(tender_id: str, session: Session = Depends(get_session)) ->
         "required_documents": _REQUIRED_DOCS,
         "note": "Carpeta de expediente lógica; el almacenamiento de ficheros (MinIO/S3) es futuro.",
     }
+
+
+@router.post("/{tender_id}/generate-offer-drafts")
+def generate_offer_drafts(tender_id: str, session: Session = Depends(get_session)) -> dict:
+    """Genera y persiste los borradores de oferta (Go/No-Go, memoria, matriz, checklist)."""
+    tender = _get_or_404(session, tender_id)
+    if not analysis_client.is_configured():
+        raise HTTPException(503, "analysis-service no configurado.")
+
+    document_text = None
+    if doc_client.is_configured() and tender.url:
+        try:
+            chunks = doc_client.extract(tender.url).get("chunks", [])
+            document_text = "\n".join(c.get("content", "") for c in chunks)[:20000] or None
+        except httpx.HTTPError:
+            document_text = None
+
+    score = _latest_score(session, tender_id)
+    score_payload = score_to_contract(score).model_dump(mode="json") if score else None
+    try:
+        result = analysis_client.generate_drafts(
+            tender_to_contract(tender).model_dump(mode="json"), document_text, score_payload
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"Generación de borradores fallida: {exc}") from exc
+
+    # Reemplaza los borradores previos por el nuevo conjunto.
+    for old in session.scalars(
+        select(GeneratedDocument).where(GeneratedDocument.tender_id == tender_id)
+    ).all():
+        session.delete(old)
+    out = []
+    for d in result.get("drafts", []):
+        row = GeneratedDocument(
+            tender_id=tender_id,
+            kind=d.get("kind", "doc"),
+            title=d.get("title", ""),
+            content=d.get("content", ""),
+            generated_by="llm" if document_text else "rule-based",
+        )
+        session.add(row)
+        out.append({"kind": row.kind, "title": row.title})
+    session.commit()
+    return {"tender_id": tender_id, "generated": out, "count": len(out)}
+
+
+@router.get("/{tender_id}/generated-documents")
+def generated_documents(tender_id: str, session: Session = Depends(get_session)) -> list[dict]:
+    """Lista los borradores de oferta generados para la licitación."""
+    _get_or_404(session, tender_id)
+    rows = session.scalars(
+        select(GeneratedDocument)
+        .where(GeneratedDocument.tender_id == tender_id)
+        .order_by(GeneratedDocument.created_at)
+    ).all()
+    return [
+        {
+            "id": r.id,
+            "kind": r.kind,
+            "title": r.title,
+            "content": r.content,
+            "generated_by": r.generated_by,
+        }
+        for r in rows
+    ]
 
 
 @router.get("/{tender_id}/required-documents")

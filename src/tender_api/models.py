@@ -55,6 +55,9 @@ class Tender(Base):
     decisions: Mapped[list[TenderDecision]] = relationship(
         back_populates="tender", cascade="all, delete-orphan"
     )
+    documents: Mapped[list[GeneratedDocument]] = relationship(
+        back_populates="tender", cascade="all, delete-orphan"
+    )
 
 
 class TenderScore(Base):
@@ -92,6 +95,22 @@ class TenderDecision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     tender: Mapped[Tender] = relationship(back_populates="decisions")
+
+
+class GeneratedDocument(Base):
+    """Borrador de oferta generado (Go/No-Go, memoria técnica, matriz, checklist…)."""
+
+    __tablename__ = "generated_documents"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    tender_id: Mapped[str] = mapped_column(ForeignKey("tenders.id"), index=True)
+    kind: Mapped[str] = mapped_column(String, index=True)
+    title: Mapped[str] = mapped_column(String)
+    content: Mapped[str] = mapped_column(String)
+    generated_by: Mapped[str] = mapped_column(String, default="rule-based")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    tender: Mapped[Tender] = relationship(back_populates="documents")
 
 
 class TenderAction(Base):
