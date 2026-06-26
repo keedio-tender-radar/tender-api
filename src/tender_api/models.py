@@ -161,6 +161,18 @@ class GeneratedDocument(Base):
     tender: Mapped[Tender] = relationship(back_populates="documents")
 
 
+class DailySnapshot(Base):
+    """Foto diaria de las licitaciones activas top (histórico web+Telegram)."""
+
+    __tablename__ = "daily_snapshots"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    snapshot_date: Mapped[date] = mapped_column(Date, unique=True, index=True)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    items: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class TenderNote(Base):
     """Nota/comentario del equipo sobre una licitación (colaboración)."""
 

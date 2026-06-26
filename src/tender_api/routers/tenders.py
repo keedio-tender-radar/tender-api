@@ -18,6 +18,7 @@ from tender_contracts import TenderScore as ScoreContract
 from tender_api.config import settings
 from tender_api.database import get_session
 from tender_api.models import (
+    DailySnapshot,
     GeneratedDocument,
     Tender,
     TenderAction,
@@ -343,6 +344,74 @@ def stats(session: Session = Depends(get_session)) -> dict:
         "avg_score": round(float(avg_score)),
         "last_ingested_at": last_ingested.isoformat() if last_ingested else None,
         "last_scored_at": last_scored.isoformat() if last_scored else None,
+    }
+
+
+def _active_top_items(session: Session, limit: int) -> list[dict]:
+    """Construye el ranking de activas (no vencidas, no duplicadas, puntuadas) con semáforo."""
+    now = datetime.now(UTC)
+    scored = []
+    for t in session.scalars(select(Tender).where(Tender.duplicate_of.is_(None))).all():
+        if t.deadline and _aware(t.deadline) < now:
+            continue
+        sc = _latest_score(session, t.id)
+        if not sc:
+            continue
+        scored.append((t, sc))
+    scored.sort(key=lambda p: p[1].total, reverse=True)
+    items = []
+    for t, sc in scored[:limit]:
+        days = semaphore.days_remaining(t.deadline)
+        light = semaphore.traffic_light(sc.total, sc.recommendation, days)
+        items.append({
+            "tender_id": t.id,
+            "title": t.title,
+            "source": t.source,
+            "score": sc.total,
+            "recommendation": sc.recommendation,
+            "traffic_light": light["light"],
+            "traffic_light_label": light["label"],
+            "deadline": t.deadline.isoformat() if t.deadline else None,
+            "days_remaining": days,
+        })
+    return items
+
+
+@router.post("/daily-snapshot")
+def create_daily_snapshot(
+    session: Session = Depends(get_session),
+    x_run_token: str | None = Header(default=None),
+    limit: int = Query(default=15, ge=1, le=50),
+) -> dict:
+    """Guarda la foto diaria de activas top (histórico). Idempotente por fecha; para scheduler."""
+    if settings.run_token and x_run_token != settings.run_token:
+        raise HTTPException(401, "Token de ejecución inválido o ausente.")
+    today = datetime.now(UTC).date()
+    items = _active_top_items(session, limit)
+    row = session.scalar(select(DailySnapshot).where(DailySnapshot.snapshot_date == today))
+    if row:
+        row.items = items
+        row.count = len(items)
+    else:
+        row = DailySnapshot(snapshot_date=today, items=items, count=len(items))
+        session.add(row)
+    session.commit()
+    number = session.scalar(select(func.count()).select_from(DailySnapshot)) or 0
+    return {"date": today.isoformat(), "number": number, "count": len(items), "items": items}
+
+
+@router.get("/daily-snapshot")
+def get_daily_snapshot(session: Session = Depends(get_session)) -> dict:
+    """Última foto diaria persistida (web)."""
+    row = session.scalar(select(DailySnapshot).order_by(DailySnapshot.snapshot_date.desc()))
+    number = session.scalar(select(func.count()).select_from(DailySnapshot)) or 0
+    if not row:
+        return {"date": None, "number": 0, "count": 0, "items": []}
+    return {
+        "date": row.snapshot_date.isoformat(),
+        "number": number,
+        "count": row.count,
+        "items": row.items or [],
     }
 
 
