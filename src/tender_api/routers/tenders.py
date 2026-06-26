@@ -71,9 +71,32 @@ def ingest_tender(payload: TenderCreate, session: Session = Depends(get_session)
     else:
         row = Tender(**data)
         session.add(row)
+    row.duplicate_of = _find_duplicate(session, row)
     session.commit()
     session.refresh(row)
     return tender_to_contract(row)
+
+
+def _find_duplicate(session: Session, row: Tender) -> str | None:
+    """Detecta la misma licitación en OTRA fuente: mismo presupuesto exacto + CPV primario.
+
+    Conservador (exige presupuesto y CPV no nulos) para no ocultar licitaciones distintas.
+    """
+    if not row.budget_amount or not row.cpv:
+        return None
+    primary = str(row.cpv[0])
+    candidates = session.scalars(
+        select(Tender).where(
+            Tender.budget_amount == row.budget_amount,
+            Tender.source != row.source,
+            Tender.duplicate_of.is_(None),
+            Tender.id != row.id,
+        )
+    ).all()
+    for c in candidates:
+        if c.cpv and str(c.cpv[0]) == primary:
+            return c.id
+    return None
 
 
 @router.get("", response_model=list[TenderContract])
@@ -128,7 +151,7 @@ def search_tenders(
     """Listado operativo con filtros (score, semáforo, plazo, órgano) y el último score."""
     dl_before, dl_after = _parse_dt(deadline_before), _parse_dt(deadline_after)
 
-    stmt = select(Tender)
+    stmt = select(Tender).where(Tender.duplicate_of.is_(None))
     if status:
         stmt = stmt.where(Tender.status == status)
     if q:
@@ -183,7 +206,9 @@ def top_tenders(
 ):
     """Mejores oportunidades por último score (desc). Solo licitaciones ya puntuadas."""
     scored = []
-    for tender in session.scalars(select(Tender)).all():
+    for tender in session.scalars(
+        select(Tender).where(Tender.duplicate_of.is_(None))
+    ).all():
         score = _latest_score(session, tender.id)
         if score is not None:
             scored.append((tender, score))
@@ -206,6 +231,7 @@ def urgent_tenders(
 
     rows = session.scalars(
         select(Tender)
+        .where(Tender.duplicate_of.is_(None))
         .where(Tender.deadline.is_not(None))
         .where(Tender.deadline >= now)
         .where(Tender.deadline <= limit_dt)
@@ -539,7 +565,7 @@ def pending_alerts(
 ):
     """Oportunidades GO aún no alertadas (sin acción 'alerted'). Para el push inmediato."""
     out: list[TenderWithScore] = []
-    for t in session.scalars(select(Tender)).all():
+    for t in session.scalars(select(Tender).where(Tender.duplicate_of.is_(None))).all():
         score = _latest_score(session, t.id)
         if not score or score.recommendation != "go":
             continue

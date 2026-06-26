@@ -50,6 +50,8 @@ class Tender(Base):
     deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     url: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, default="discovered", index=True)
+    # Si es duplicada de otra fuente, apunta a la licitación "canónica" (se excluye de las vistas).
+    duplicate_of: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
