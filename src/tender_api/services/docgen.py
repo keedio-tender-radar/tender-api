@@ -9,9 +9,36 @@ from __future__ import annotations
 
 import functools
 import re
+from datetime import UTC, datetime
 from io import BytesIO
 
 from tender_api.config import settings
+
+_HARD_RULE_TXT = {
+    "cpv_excluded": "CPV fuera del perfil Keedio",
+    "partner_needed": "Requiere partner para presentarse",
+    "deadline_below_min": "Plazo por debajo del mínimo operativo",
+}
+
+
+def _days_remaining(deadline) -> int | None:
+    if not deadline:
+        return None
+    dl = deadline if deadline.tzinfo else deadline.replace(tzinfo=UTC)
+    return (dl - datetime.now(UTC)).days
+
+
+def _risks_from_score(score) -> list[str]:
+    """Riesgos reales derivados del análisis: factores negativos + reglas duras."""
+    if not score:
+        return []
+    risks = [
+        f.get("message", "")
+        for f in (score.factors or [])
+        if f.get("kind") == "negative" and f.get("message")
+    ]
+    risks += [_HARD_RULE_TXT.get(r, r) for r in (score.hard_rules or [])]
+    return risks
 
 BRAND = (0x5B, 0x94, 0xFF)
 
@@ -202,8 +229,29 @@ def _docx_figures(doc, tender, score) -> None:
         for c in cpvs[:8]:
             doc.add_paragraph(_cpv_label(c), style="List Bullet")
 
-    # 3) Mapa de riesgos 3×3 (probabilidad × impacto).
-    doc.add_heading("Mapa de riesgos (plantilla)", level=2)
+    # Plazo real hasta presentación.
+    days = _days_remaining(getattr(tender, "deadline", None))
+    if days is not None:
+        dl = tender.deadline
+        ds = dl.date().isoformat() if hasattr(dl, "date") else str(dl)[:10]
+        rp = doc.add_paragraph()
+        rr = rp.add_run(f"Plazo hasta presentación: {days} días (cierre {ds})")
+        rr.bold = True
+        col = (
+            (0xE0, 0x5A, 0x4A) if days <= 7
+            else (0xF2, 0xC1, 0x1E) if days <= 21 else (0x3F, 0xB9, 0x50)
+        )
+        rr.font.color.rgb = RGBColor(*col)
+
+    # 3) Riesgos REALES del análisis + matriz marco.
+    doc.add_heading("Riesgos y mitigaciones", level=2)
+    risks = _risks_from_score(score)
+    if risks:
+        for rk in risks[:8]:
+            doc.add_paragraph(rk, style="List Bullet")
+    else:
+        doc.add_paragraph("Sin riesgos destacados en el análisis. Revisar el pliego completo.")
+    doc.add_paragraph("Marco de evaluación (probabilidad × impacto):").italic = True
     rt = doc.add_table(rows=4, cols=4)
     rt.style = "Table Grid"
     rt.rows[0].cells[0].text = "Prob \\ Impacto"
@@ -421,10 +469,36 @@ def _pdf_figures(pdf, tender, score) -> None:
             pdf.cell(0, 6, _latin1(_cpv_label(c)), ln=1)
         pdf.ln(2)
 
-    # 3) Mapa de riesgos (probabilidad × impacto).
+    # Plazo real hasta presentación (dato del expediente).
+    days = _days_remaining(getattr(tender, "deadline", None))
+    if days is not None:
+        color = (
+            (0xE0, 0x5A, 0x4A) if days <= 7
+            else (0xF2, 0xC1, 0x1E) if days <= 21 else (0x3F, 0xB9, 0x50)
+        )
+        pdf.set_text_color(*color)
+        pdf.set_font("Helvetica", "B", 11)
+        dl = tender.deadline
+        ds = dl.date().isoformat() if hasattr(dl, "date") else str(dl)[:10]
+        _mc(pdf, 6, _latin1(f"Plazo hasta presentacion: {days} dias (cierre {ds})"))
+        pdf.ln(1)
+
+    # 3) Mapa de riesgos: riesgos REALES del análisis + matriz marco.
     pdf.set_text_color(20, 20, 20)
     pdf.set_font("Helvetica", "B", 11)
-    _mc(pdf, 6, "Mapa de riesgos (plantilla)")
+    _mc(pdf, 6, "Riesgos y mitigaciones")
+    risks = _risks_from_score(score)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(60, 60, 60)
+    if risks:
+        for rk in risks[:8]:
+            _mc(pdf, 5, _latin1("  - " + rk))
+    else:
+        _mc(pdf, 5, "Sin riesgos destacados en el análisis. Revisar el pliego completo.")
+    pdf.ln(1)
+    pdf.set_text_color(110, 110, 110)
+    pdf.set_font("Helvetica", "I", 8)
+    _mc(pdf, 4, "Marco de evaluación (probabilidad x impacto):")
     cell = 18
     x0 = pdf.l_margin + 22
     y0 = pdf.get_y()
