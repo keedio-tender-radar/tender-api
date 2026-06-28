@@ -1089,6 +1089,7 @@ def download_project_plan(tender_id: str, session: Session = Depends(get_session
         tender, _latest_score(session, tender_id),
         team=list(p.team or []), months=p.project_months,
         rate=p.hourly_rate, margin=p.margin,
+        drafts=_drafts_for(session, tender_id),
     )
     media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     return Response(
