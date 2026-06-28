@@ -141,7 +141,7 @@ def _parse_table(lines: list[str], i: int) -> tuple[list[list[str]], int]:
 
 # ----------------------------- Word (.docx) -----------------------------
 
-def build_docx(tender, drafts, score, team=None, months=None) -> bytes:
+def build_docx(tender, drafts, score, team=None, months=None, rate=None, margin=None) -> bytes:
     from docx import Document
     from docx.shared import Inches, Pt, RGBColor
 
@@ -202,6 +202,7 @@ def build_docx(tender, drafts, score, team=None, months=None) -> bytes:
             cells[mth].text = "█" if start <= mth <= end else ""
 
     _docx_figures(doc, tender, score, team)
+    _docx_plan(doc, drafts, team, rate, margin)
 
     # Borradores.
     for d in drafts:
@@ -292,6 +293,50 @@ def _docx_figures(doc, tender, score, team=None) -> None:
         ct.rows[0].cells[i].text = name
 
 
+def _plan_data(drafts, team, rate, margin):
+    """(reqs[(req,horas)], total_horas, precio) a partir de la matriz + heurística de horas."""
+    from tender_api.services import estimate
+
+    team = [t for t in (team or []) if t] or ["Front", "Back", "Data", "QA"]
+    rate = float(rate or 45.0)
+    margin = float(margin if margin is not None else 0.2)
+    reqs = estimate.requirements_from_drafts(drafts)
+    rows = [(req, estimate.req_hours_total(req, team)) for req, _ in reqs]
+    total = sum(h for _, h in rows)
+    price = total * rate * 1.04 * (1 + margin)
+    return rows, total, rate, margin, price
+
+
+def _docx_plan(doc, drafts, team, rate, margin) -> None:
+    from docx.shared import Pt
+
+    rows, total, rate, margin, price = _plan_data(drafts, team, rate, margin)
+    if not rows:
+        return
+    doc.add_heading("Plan de proyecto y estimación", level=2)
+    t = doc.add_table(rows=1, cols=2)
+    t.style = "Light Grid Accent 1"
+    t.rows[0].cells[0].text, t.rows[0].cells[1].text = "Requisito", "Horas est."
+    for req, h in rows:
+        c = t.add_row().cells
+        c[0].text, c[1].text = req, str(h)
+    tot = t.add_row().cells
+    tot[0].text, tot[1].text = "TOTAL", str(total)
+    tot[0].paragraphs[0].runs[0].font.bold = True
+    tot[1].paragraphs[0].runs[0].font.bold = True
+    p = doc.add_paragraph()
+    p.add_run(
+        f"Horas totales: {total} · Coste/hora: {rate:.0f} € · Margen: {margin * 100:.0f}% · "
+    )
+    pr = p.add_run(f"Precio estimado: {price:,.0f} €")
+    pr.bold = True
+    pr.font.size = Pt(12)
+    doc.add_paragraph(
+        "Estimación orientativa por complejidad (S/M/L). Ajustable; el Excel permite el detalle "
+        "por perfil."
+    ).italic = True
+
+
 def _docx_markdown(doc, md: str) -> None:
     from docx.shared import Pt
 
@@ -343,7 +388,7 @@ def _mc(pdf, h: float, txt: str) -> None:
     pdf.multi_cell(0, h, txt)
 
 
-def build_pdf(tender, drafts, score, team=None, months=None) -> bytes:
+def build_pdf(tender, drafts, score, team=None, months=None, rate=None, margin=None) -> bytes:
     from fpdf import FPDF
 
     months = months or GANTT_MONTHS
@@ -438,6 +483,7 @@ def build_pdf(tender, drafts, score, team=None, months=None) -> bytes:
     pdf.ln(3)
 
     _pdf_figures(pdf, tender, score, team)
+    _pdf_plan(pdf, drafts, team, rate, margin)
 
     for d in drafts:
         pdf.add_page()
@@ -569,6 +615,38 @@ def _pdf_figures(pdf, tender, score, team=None) -> None:
         pdf.set_xy(bx, cy + 1.5)
         pdf.cell(cw, 6, _latin1(name), align="C")
     pdf.set_y(cy + bh + 4)
+
+
+def _pdf_plan(pdf, drafts, team, rate, margin) -> None:
+    rows, total, rate, margin, price = _plan_data(drafts, team, rate, margin)
+    if not rows:
+        return
+    pdf.add_page()
+    pdf.set_text_color(20, 20, 20)
+    pdf.set_font("Helvetica", "B", 12)
+    _mc(pdf, 7, "Plan de proyecto y estimación")
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_x(pdf.l_margin)
+    pdf.cell(150, 6, "Requisito", border=1, ln=0)
+    pdf.cell(40, 6, "Horas est.", border=1, ln=1)
+    pdf.set_font("Helvetica", "", 8)
+    for req, h in rows:
+        pdf.set_x(pdf.l_margin)
+        pdf.cell(150, 6, _latin1(req)[:78], border=1, ln=0)
+        pdf.cell(40, 6, str(h), border=1, ln=1)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_x(pdf.l_margin)
+    pdf.cell(150, 6, "TOTAL", border=1, ln=0)
+    pdf.cell(40, 6, str(total), border=1, ln=1)
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "", 10)
+    _mc(pdf, 5, _latin1(f"Coste/hora: {rate:.0f} EUR  -  Margen: {margin * 100:.0f}%"))
+    pdf.set_text_color(*BRAND)
+    pdf.set_font("Helvetica", "B", 12)
+    _mc(pdf, 7, _latin1(f"Precio estimado: {price:,.0f} EUR"))
+    pdf.set_text_color(110, 110, 110)
+    pdf.set_font("Helvetica", "I", 8)
+    _mc(pdf, 4, "Estimacion orientativa por complejidad (S/M/L); detalle por perfil en el Excel.")
 
 
 def _pdf_markdown(pdf, md: str) -> None:

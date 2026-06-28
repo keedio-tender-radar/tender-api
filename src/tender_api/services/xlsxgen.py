@@ -28,41 +28,16 @@ def _styles():
     }
 
 
-def _requirements_from_drafts(drafts) -> list[tuple[str, str]]:
-    """Extrae (requisito, descripción) de las tablas de los borradores (matriz de cumplimiento)."""
-    from tender_api.services.docgen import _parse_table
-
-    out: list[tuple[str, str]] = []
-    # La matriz primero; si no, cualquier borrador con tabla.
-    ordered = sorted(drafts or [], key=lambda d: 0 if "matriz" in (d.kind or "") else 1)
-    for d in ordered:
-        lines = (d.content or "").split("\n")
-        i = 0
-        while i < len(lines):
-            if lines[i].lstrip().startswith("|"):
-                rows, i = _parse_table(lines, i)
-                if len(rows) >= 2 and "requisito" in " ".join(rows[0]).lower():
-                    for r in rows[1:]:
-                        req = (r[0] if r else "").strip()
-                        # Descripción = evidencia (col 3+); se omite la columna "Cumple".
-                        desc = " · ".join(c.strip() for c in r[2:] if c.strip())
-                        if req:
-                            out.append((req, desc))
-            else:
-                i += 1
-        if out:
-            break
-    return out
-
-
 def build_project_plan(tender, score, team, months, rate, margin, drafts=None) -> bytes:
     from openpyxl import Workbook
+
+    from tender_api.services import estimate
 
     team = [t for t in (team or []) if t] or _DEFAULT_TEAM
     months = int(months or 6)
     rate = float(rate or 45.0)
     margin = float(margin if margin is not None else 0.2)
-    reqs = _requirements_from_drafts(drafts)
+    reqs = estimate.requirements_from_drafts(drafts)
     st = _styles()
 
     wb = Workbook()
@@ -77,6 +52,8 @@ def build_project_plan(tender, score, team, months, rate, margin, drafts=None) -
 
 def _sheet_requerimientos(wb, ws, tender, team, st, reqs=None) -> None:
     from openpyxl.utils import get_column_letter
+
+    from tender_api.services import estimate
 
     reqs = reqs or []
     ws.title = "Requerimientos"
@@ -106,6 +83,11 @@ def _sheet_requerimientos(wb, ws, tender, team, st, reqs=None) -> None:
             ws.cell(r, 3, reqs[i][0]).alignment = st["wrap"]  # Requisito
             if reqs[i][1]:
                 ws.cell(r, 4, reqs[i][1]).alignment = st["wrap"]  # Descripción/Evidencia
+            # Horas sugeridas por rol según complejidad (editable).
+            hours = estimate.suggest_hours(reqs[i][0], team)
+            for j, role in enumerate(team):
+                if hours.get(role):
+                    ws.cell(r, first_hour + j, hours[role])
         for c in range(1, total_col + 1):
             ws.cell(r, c).border = st["border"]
         fl, ll = get_column_letter(first_hour), get_column_letter(last_hour)

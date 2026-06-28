@@ -1070,14 +1070,6 @@ def _drafts_for(session: Session, tender_id: str) -> list[GeneratedDocument]:
     ).all()
 
 
-def _profile_team_months(session: Session) -> tuple[list[str] | None, int | None]:
-    """Equipo y duración del perfil Keedio para el organigrama y el cronograma."""
-    from tender_api.routers.profile import _get_or_create
-
-    p = _get_or_create(session)
-    return (list(p.team or []) or None, p.project_months or None)
-
-
 @router.get("/{tender_id}/plan.xlsx")
 def download_project_plan(tender_id: str, session: Session = Depends(get_session)) -> Response:
     """Módulo de planificación/estimación en Excel: requerimientos, cronograma y costes."""
@@ -1104,11 +1096,13 @@ def download_project_plan(tender_id: str, session: Session = Depends(get_session
 @router.get("/{tender_id}/package.docx")
 def download_package_docx(tender_id: str, session: Session = Depends(get_session)) -> Response:
     """Paquete de oferta en Word (.docx) con marca Keedio, tablas y figuras."""
+    from tender_api.routers.profile import _get_or_create
+
     tender = _get_or_404(session, tender_id)
-    team, months = _profile_team_months(session)
+    p = _get_or_create(session)
     data = docgen.build_docx(
         tender, _drafts_for(session, tender_id), _latest_score(session, tender_id),
-        team=team, months=months,
+        team=list(p.team or []), months=p.project_months, rate=p.hourly_rate, margin=p.margin,
     )
     return Response(
         content=data,
@@ -1122,11 +1116,13 @@ def download_package_docx(tender_id: str, session: Session = Depends(get_session
 @router.get("/{tender_id}/package.pdf")
 def download_package_pdf(tender_id: str, session: Session = Depends(get_session)) -> Response:
     """Paquete de oferta en PDF con marca Keedio, tablas y figuras."""
+    from tender_api.routers.profile import _get_or_create
+
     tender = _get_or_404(session, tender_id)
-    team, months = _profile_team_months(session)
+    p = _get_or_create(session)
     data = docgen.build_pdf(
         tender, _drafts_for(session, tender_id), _latest_score(session, tender_id),
-        team=team, months=months,
+        team=list(p.team or []), months=p.project_months, rate=p.hourly_rate, margin=p.margin,
     )
     return Response(
         content=data,
