@@ -28,6 +28,8 @@ DEFAULTS = {
     ],
     "team": ["Arquitecto/a", "Equipo desarrollo", "QA / Pruebas", "Soporte"],
     "project_months": 6,
+    "hourly_rate": 45.0,
+    "margin": 0.2,
 }
 
 
@@ -39,6 +41,8 @@ class ProfileUpdate(BaseModel):
     areas: list[str] | None = None
     team: list[str] | None = None
     project_months: int | None = None
+    hourly_rate: float | None = None
+    margin: float | None = None
 
 
 def _get_or_create(session: Session) -> ScoringProfile:
@@ -60,6 +64,8 @@ def _serialize(r: ScoringProfile) -> dict:
         "areas": list(r.areas or []),
         "team": list(r.team or []) or DEFAULTS["team"],
         "project_months": r.project_months or DEFAULTS["project_months"],
+        "hourly_rate": r.hourly_rate or DEFAULTS["hourly_rate"],
+        "margin": r.margin if r.margin is not None else DEFAULTS["margin"],
     }
 
 

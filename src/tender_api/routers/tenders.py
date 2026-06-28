@@ -42,6 +42,7 @@ from tender_api.services import (
     semaphore,
     storage,
     visual_rag_client,
+    xlsxgen,
 )
 from tender_api.services.learning import learning_insights
 
@@ -1075,6 +1076,28 @@ def _profile_team_months(session: Session) -> tuple[list[str] | None, int | None
 
     p = _get_or_create(session)
     return (list(p.team or []) or None, p.project_months or None)
+
+
+@router.get("/{tender_id}/plan.xlsx")
+def download_project_plan(tender_id: str, session: Session = Depends(get_session)) -> Response:
+    """Módulo de planificación/estimación en Excel: requerimientos, cronograma y costes."""
+    from tender_api.routers.profile import _get_or_create
+
+    tender = _get_or_404(session, tender_id)
+    p = _get_or_create(session)
+    data = xlsxgen.build_project_plan(
+        tender, _latest_score(session, tender_id),
+        team=list(p.team or []), months=p.project_months,
+        rate=p.hourly_rate, margin=p.margin,
+    )
+    media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    return Response(
+        content=data,
+        media_type=media,
+        headers={
+            "Content-Disposition": f'attachment; filename="{_slug(tender.title)}-plan.xlsx"'
+        },
+    )
 
 
 @router.get("/{tender_id}/package.docx")

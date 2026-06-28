@@ -34,3 +34,17 @@ def test_docx_and_pdf_download(client):
     assert pdf.status_code == 200
     assert pdf.headers["content-type"] == "application/pdf"
     assert pdf.content[:4] == b"%PDF"
+
+
+def test_plan_xlsx_download(client):
+    t = make_tender(client)
+    r = client.get(f"/api/tenders/{t['id']}/plan.xlsx")
+    assert r.status_code == 200
+    assert "spreadsheetml" in r.headers["content-type"]
+    assert r.content[:2] == b"PK"  # xlsx es zip
+    # comprueba las 3 hojas
+    import io
+
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    assert wb.sheetnames == ["Requerimientos", "Cronograma", "Resumen de costes"]

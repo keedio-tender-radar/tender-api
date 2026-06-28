@@ -12,6 +12,8 @@ _COLUMN_MIGRATIONS = [
     ("tender_scores", "summary", "VARCHAR"),
     ("scoring_profile", "team", "JSONB"),
     ("scoring_profile", "project_months", "INTEGER"),
+    ("scoring_profile", "hourly_rate", "DOUBLE PRECISION"),
+    ("scoring_profile", "margin", "DOUBLE PRECISION"),
 ]
 
 

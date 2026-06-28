@@ -125,6 +125,8 @@ class ScoringProfile(Base):
     areas: Mapped[list] = mapped_column(JSON, default=list)
     team: Mapped[list] = mapped_column(JSON, default=list)  # roles del equipo (organigrama)
     project_months: Mapped[int] = mapped_column(Integer, default=6)  # duración (cronograma)
+    hourly_rate: Mapped[float] = mapped_column(Float, default=45.0)  # €/hora (estimación)
+    margin: Mapped[float] = mapped_column(Float, default=0.2)  # margen comercial (0..1)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
     )
