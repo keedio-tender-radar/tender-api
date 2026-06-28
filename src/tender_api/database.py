@@ -10,6 +10,8 @@ from tender_api.config import settings
 _COLUMN_MIGRATIONS = [
     ("tenders", "duplicate_of", "VARCHAR"),
     ("tender_scores", "summary", "VARCHAR"),
+    ("scoring_profile", "team", "JSONB"),
+    ("scoring_profile", "project_months", "INTEGER"),
 ]
 
 

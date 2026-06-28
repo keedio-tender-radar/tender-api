@@ -123,6 +123,8 @@ class ScoringProfile(Base):
     cpv_preferred: Mapped[list] = mapped_column(JSON, default=list)
     cpv_excluded: Mapped[list] = mapped_column(JSON, default=list)
     areas: Mapped[list] = mapped_column(JSON, default=list)
+    team: Mapped[list] = mapped_column(JSON, default=list)  # roles del equipo (organigrama)
+    project_months: Mapped[int] = mapped_column(Integer, default=6)  # duración (cronograma)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
     )

@@ -69,6 +69,18 @@ ORG_CHILDREN = ["Arquitecto/a", "Equipo desarrollo", "QA / Pruebas", "Soporte"]
 RISK_LEVELS = ["Baja", "Media", "Alta"]
 
 
+def _scaled_phases(months: int) -> list[tuple[str, int, int]]:
+    """Escala las fases plantilla (6 meses) a `months` meses, manteniendo proporciones."""
+    if months == GANTT_MONTHS:
+        return GANTT_PHASES
+    out = []
+    for name, s, e in GANTT_PHASES:
+        ns = max(1, round((s - 1) / GANTT_MONTHS * months) + 1)
+        ne = min(months, max(ns, round(e / GANTT_MONTHS * months)))
+        out.append((name, ns, ne))
+    return out
+
+
 def _cpv_label(code: str) -> str:
     code = (code or "").strip()
     div = _CPV_DIV.get(code[:2])
@@ -129,10 +141,12 @@ def _parse_table(lines: list[str], i: int) -> tuple[list[list[str]], int]:
 
 # ----------------------------- Word (.docx) -----------------------------
 
-def build_docx(tender, drafts, score) -> bytes:
+def build_docx(tender, drafts, score, team=None, months=None) -> bytes:
     from docx import Document
     from docx.shared import Inches, Pt, RGBColor
 
+    months = months or GANTT_MONTHS
+    phases = _scaled_phases(months)
     doc = Document()
 
     # Cabecera de marca: logo real si se puede descargar; si no, marca textual.
@@ -173,21 +187,21 @@ def build_docx(tender, drafts, score) -> bytes:
             cells[1].text = f"{v}/{mx}"
             cells[2].text = "█" * round((v / mx if mx else 0) * 10)
 
-    # Figura: cronograma orientativo (Gantt) como plantilla.
-    doc.add_heading("Cronograma orientativo (plantilla)", level=2)
-    g = doc.add_table(rows=1, cols=GANTT_MONTHS + 1)
+    # Figura: cronograma (Gantt) con la duración configurada en el perfil.
+    doc.add_heading(f"Cronograma orientativo ({months} meses)", level=2)
+    g = doc.add_table(rows=1, cols=months + 1)
     g.style = "Light Grid Accent 1"
     head = g.rows[0].cells
     head[0].text = "Fase"
-    for mth in range(1, GANTT_MONTHS + 1):
+    for mth in range(1, months + 1):
         head[mth].text = f"M{mth}"
-    for name, start, end in GANTT_PHASES:
+    for name, start, end in phases:
         cells = g.add_row().cells
         cells[0].text = name
-        for mth in range(1, GANTT_MONTHS + 1):
+        for mth in range(1, months + 1):
             cells[mth].text = "█" if start <= mth <= end else ""
 
-    _docx_figures(doc, tender, score)
+    _docx_figures(doc, tender, score, team)
 
     # Borradores.
     for d in drafts:
@@ -209,8 +223,10 @@ def _shade(cell, rgb: tuple[int, int, int]) -> None:
     tcpr.append(shd)
 
 
-def _docx_figures(doc, tender, score) -> None:
+def _docx_figures(doc, tender, score, team=None) -> None:
     from docx.shared import Pt, RGBColor
+
+    children = team or ORG_CHILDREN
 
     # 1) Score total (gauge textual).
     if score:
@@ -270,10 +286,10 @@ def _docx_figures(doc, tender, score) -> None:
     top.style = "Table Grid"
     top.rows[0].cells[0].text = ORG_ROOT
     _shade(top.rows[0].cells[0], BRAND)
-    children = doc.add_table(rows=1, cols=len(ORG_CHILDREN))
-    children.style = "Table Grid"
-    for i, name in enumerate(ORG_CHILDREN):
-        children.rows[0].cells[i].text = name
+    ct = doc.add_table(rows=1, cols=len(children))
+    ct.style = "Table Grid"
+    for i, name in enumerate(children):
+        ct.rows[0].cells[i].text = name
 
 
 def _docx_markdown(doc, md: str) -> None:
@@ -327,9 +343,11 @@ def _mc(pdf, h: float, txt: str) -> None:
     pdf.multi_cell(0, h, txt)
 
 
-def build_pdf(tender, drafts, score) -> bytes:
+def build_pdf(tender, drafts, score, team=None, months=None) -> bytes:
     from fpdf import FPDF
 
+    months = months or GANTT_MONTHS
+    phases = _scaled_phases(months)
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
@@ -394,32 +412,32 @@ def build_pdf(tender, drafts, score) -> bytes:
             pdf.cell(0, 6, f"{v}/{mx}", ln=1)
         pdf.ln(3)
 
-    # Figura: cronograma orientativo (Gantt).
+    # Figura: cronograma (Gantt) con la duración del perfil.
     pdf.set_text_color(20, 20, 20)
     pdf.set_font("Helvetica", "B", 11)
-    _mc(pdf, 6, "Cronograma orientativo (plantilla)")
+    _mc(pdf, 6, f"Cronograma orientativo ({months} meses)")
     col_w = 22.0
-    cell_w = (190 - col_w) / GANTT_MONTHS
+    cell_w = (190 - col_w) / months
     pdf.set_font("Helvetica", "", 8)
     pdf.set_text_color(110, 110, 110)
     pdf.set_x(pdf.l_margin + col_w)
-    for mth in range(1, GANTT_MONTHS + 1):
+    for mth in range(1, months + 1):
         pdf.cell(cell_w, 5, f"M{mth}", border=0, align="C", ln=0)
     pdf.ln(5)
-    for name, start, end in GANTT_PHASES:
+    for name, start, end in phases:
         y = pdf.get_y()
         pdf.set_text_color(60, 60, 60)
         pdf.set_x(pdf.l_margin)
         pdf.cell(col_w, 6, _latin1(name)[:14], ln=0)
         x0 = pdf.get_x()
-        for mth in range(GANTT_MONTHS):
+        for mth in range(months):
             if start <= mth + 1 <= end:
                 pdf.set_fill_color(*BRAND)
                 pdf.rect(x0 + mth * cell_w + 1, y + 1, cell_w - 2, 4, "F")
         pdf.ln(6)
     pdf.ln(3)
 
-    _pdf_figures(pdf, tender, score)
+    _pdf_figures(pdf, tender, score, team)
 
     for d in drafts:
         pdf.add_page()
@@ -429,7 +447,8 @@ def build_pdf(tender, drafts, score) -> bytes:
     return bytes(out)
 
 
-def _pdf_figures(pdf, tender, score) -> None:
+def _pdf_figures(pdf, tender, score, team=None) -> None:
+    children = team or ORG_CHILDREN
     # 1) Gauge del score total.
     if score:
         pdf.set_text_color(20, 20, 20)
@@ -531,15 +550,16 @@ def _pdf_figures(pdf, tender, score) -> None:
     pdf.set_font("Helvetica", "B", 9)
     pdf.set_xy(top_x, top_y + 1.5)
     pdf.cell(bw, 6, _latin1(ORG_ROOT), align="C")
-    cw = 44
-    n = len(ORG_CHILDREN)
+    org = children[:6]
+    n = len(org)
+    cw = min(44.0, (190 - (n - 1) * 4) / n)
     total_w = n * cw + (n - 1) * 4
     cx0 = pdf.l_margin + (190 - total_w) / 2
     cy = top_y + bh + 12
     pdf.set_draw_color(150, 160, 180)
     pdf.line(top_x + bw / 2, top_y + bh, top_x + bw / 2, cy - 6)
-    pdf.set_font("Helvetica", "", 8)
-    for i, name in enumerate(ORG_CHILDREN):
+    pdf.set_font("Helvetica", "", 7)
+    for i, name in enumerate(org):
         bx = cx0 + i * (cw + 4)
         pdf.line(top_x + bw / 2, cy - 6, bx + cw / 2, cy - 6)
         pdf.line(bx + cw / 2, cy - 6, bx + cw / 2, cy)

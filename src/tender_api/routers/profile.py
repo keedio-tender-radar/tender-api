@@ -26,6 +26,8 @@ DEFAULTS = {
     "areas": [
         "Big Data", "IA", "Machine Learning", "APIs", "Integración", "Cloud", "Ciberseguridad",
     ],
+    "team": ["Arquitecto/a", "Equipo desarrollo", "QA / Pruebas", "Soporte"],
+    "project_months": 6,
 }
 
 
@@ -35,6 +37,8 @@ class ProfileUpdate(BaseModel):
     cpv_preferred: list[str] | None = None
     cpv_excluded: list[str] | None = None
     areas: list[str] | None = None
+    team: list[str] | None = None
+    project_months: int | None = None
 
 
 def _get_or_create(session: Session) -> ScoringProfile:
@@ -54,6 +58,8 @@ def _serialize(r: ScoringProfile) -> dict:
         "cpv_preferred": list(r.cpv_preferred or []),
         "cpv_excluded": list(r.cpv_excluded or []),
         "areas": list(r.areas or []),
+        "team": list(r.team or []) or DEFAULTS["team"],
+        "project_months": r.project_months or DEFAULTS["project_months"],
     }
 
 
