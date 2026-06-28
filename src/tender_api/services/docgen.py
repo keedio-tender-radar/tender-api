@@ -26,6 +26,36 @@ GANTT_PHASES: list[tuple[str, int, int]] = [
 ]
 GANTT_MONTHS = 6
 
+# Divisiones CPV (2 dígitos) para etiquetar la figura de CPV.
+_CPV_DIV = {
+    "30": "Equipos informáticos", "32": "Telecom.", "48": "Software/sistemas",
+    "50": "Mantenimiento", "51": "Instalación", "64": "Telecomunicaciones",
+    "71": "Ingeniería", "72": "Servicios TI", "73": "I+D", "79": "Consultoría",
+    "80": "Formación", "85": "Salud", "90": "Medio ambiente",
+}
+
+# Organigrama propuesto (plantilla): nodo raíz → hijos.
+ORG_ROOT = "Dirección de proyecto"
+ORG_CHILDREN = ["Arquitecto/a", "Equipo desarrollo", "QA / Pruebas", "Soporte"]
+
+# Mapa de riesgos 3×3 (probabilidad × impacto) → color de zona.
+RISK_LEVELS = ["Baja", "Media", "Alta"]
+
+
+def _cpv_label(code: str) -> str:
+    code = (code or "").strip()
+    div = _CPV_DIV.get(code[:2])
+    return f"{code} · {div}" if div else code
+
+
+def _risk_color(prob: int, impact: int) -> tuple[int, int, int]:
+    s = prob + impact  # 0..4
+    if s <= 1:
+        return (0x3F, 0xB9, 0x50)  # verde
+    if s == 2:
+        return (0xF2, 0xC1, 0x1E)  # ámbar
+    return (0xE0, 0x5A, 0x4A)  # rojo
+
 
 @functools.lru_cache(maxsize=2)
 def _logo_png(url: str) -> bytes | None:
@@ -130,6 +160,8 @@ def build_docx(tender, drafts, score) -> bytes:
         for mth in range(1, GANTT_MONTHS + 1):
             cells[mth].text = "█" if start <= mth <= end else ""
 
+    _docx_figures(doc, tender, score)
+
     # Borradores.
     for d in drafts:
         doc.add_page_break()
@@ -138,6 +170,62 @@ def build_docx(tender, drafts, score) -> bytes:
     buf = BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+def _shade(cell, rgb: tuple[int, int, int]) -> None:
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    tcpr = cell._tc.get_or_add_tcPr()
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:fill"), f"{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X}")
+    tcpr.append(shd)
+
+
+def _docx_figures(doc, tender, score) -> None:
+    from docx.shared import Pt, RGBColor
+
+    # 1) Score total (gauge textual).
+    if score:
+        doc.add_heading("Score total", level=2)
+        p = doc.add_paragraph()
+        run = p.add_run(f"{score.total}/100")
+        run.bold = True
+        run.font.size = Pt(28)
+        run.font.color.rgb = RGBColor(*BRAND)
+        p.add_run(f"   ·   {score.recommendation.upper()}").font.size = Pt(12)
+
+    # 2) CPV del expediente.
+    cpvs = list(tender.cpv or [])
+    if cpvs:
+        doc.add_heading("CPV del expediente", level=2)
+        for c in cpvs[:8]:
+            doc.add_paragraph(_cpv_label(c), style="List Bullet")
+
+    # 3) Mapa de riesgos 3×3 (probabilidad × impacto).
+    doc.add_heading("Mapa de riesgos (plantilla)", level=2)
+    rt = doc.add_table(rows=4, cols=4)
+    rt.style = "Table Grid"
+    rt.rows[0].cells[0].text = "Prob \\ Impacto"
+    for impact in range(3):
+        rt.rows[0].cells[impact + 1].text = RISK_LEVELS[impact]
+    for pi in range(3):
+        prob = 2 - pi
+        rt.rows[pi + 1].cells[0].text = RISK_LEVELS[prob]
+        for impact in range(3):
+            cell = rt.rows[pi + 1].cells[impact + 1]
+            _shade(cell, _risk_color(prob, impact))
+
+    # 4) Organigrama del equipo (plantilla).
+    doc.add_heading("Organigrama del equipo (plantilla)", level=2)
+    top = doc.add_table(rows=1, cols=1)
+    top.style = "Table Grid"
+    top.rows[0].cells[0].text = ORG_ROOT
+    _shade(top.rows[0].cells[0], BRAND)
+    children = doc.add_table(rows=1, cols=len(ORG_CHILDREN))
+    children.style = "Table Grid"
+    for i, name in enumerate(ORG_CHILDREN):
+        children.rows[0].cells[i].text = name
 
 
 def _docx_markdown(doc, md: str) -> None:
@@ -283,12 +371,110 @@ def build_pdf(tender, drafts, score) -> bytes:
         pdf.ln(6)
     pdf.ln(3)
 
+    _pdf_figures(pdf, tender, score)
+
     for d in drafts:
         pdf.add_page()
         _pdf_markdown(pdf, d.content or "")
 
     out = pdf.output()
     return bytes(out)
+
+
+def _pdf_figures(pdf, tender, score) -> None:
+    # 1) Gauge del score total.
+    if score:
+        pdf.set_text_color(20, 20, 20)
+        pdf.set_font("Helvetica", "B", 11)
+        _mc(pdf, 6, "Score total")
+        cx, cy, r = 30, pdf.get_y() + 16, 14
+        pdf.set_draw_color(220, 224, 232)
+        pdf.set_line_width(3)
+        pdf.ellipse(cx - r, cy - r, 2 * r, 2 * r)
+        rr = r * (score.total / 100) ** 0.5
+        pdf.set_fill_color(*BRAND)
+        pdf.ellipse(cx - rr, cy - rr, 2 * rr, 2 * rr, "F")
+        pdf.set_line_width(0.2)
+        pdf.set_xy(cx - r, cy - 3)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.cell(2 * r, 6, str(score.total), align="C")
+        pdf.set_xy(cx + r + 6, cy - 6)
+        pdf.set_text_color(60, 60, 60)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.cell(0, 5, f"/100  -  {score.recommendation.upper()}", ln=1)
+        pdf.set_y(cy + r + 4)
+
+    # 2) CPV del expediente.
+    cpvs = list(tender.cpv or [])
+    if cpvs:
+        pdf.set_text_color(20, 20, 20)
+        pdf.set_font("Helvetica", "B", 11)
+        _mc(pdf, 6, "CPV del expediente")
+        pdf.set_font("Helvetica", "", 9)
+        for c in cpvs[:6]:
+            pdf.set_text_color(60, 60, 60)
+            pdf.set_x(pdf.l_margin)
+            pdf.set_fill_color(*BRAND)
+            pdf.rect(pdf.l_margin, pdf.get_y() + 1.5, 3, 3, "F")
+            pdf.set_x(pdf.l_margin + 5)
+            pdf.cell(0, 6, _latin1(_cpv_label(c)), ln=1)
+        pdf.ln(2)
+
+    # 3) Mapa de riesgos (probabilidad × impacto).
+    pdf.set_text_color(20, 20, 20)
+    pdf.set_font("Helvetica", "B", 11)
+    _mc(pdf, 6, "Mapa de riesgos (plantilla)")
+    cell = 18
+    x0 = pdf.l_margin + 22
+    y0 = pdf.get_y()
+    pdf.set_font("Helvetica", "", 7)
+    for pi in range(3):  # filas: probabilidad alta arriba
+        prob = 2 - pi
+        pdf.set_text_color(110, 110, 110)
+        pdf.set_xy(pdf.l_margin, y0 + pi * cell + cell / 2 - 2)
+        pdf.cell(22, 4, _latin1("P:" + RISK_LEVELS[prob]), ln=0)
+        for impact in range(3):
+            pdf.set_fill_color(*_risk_color(prob, impact))
+            pdf.rect(x0 + impact * cell, y0 + pi * cell, cell - 1, cell - 1, "F")
+    pdf.set_text_color(110, 110, 110)
+    for impact in range(3):
+        pdf.set_xy(x0 + impact * cell, y0 + 3 * cell + 1)
+        pdf.cell(cell, 4, _latin1("I:" + RISK_LEVELS[impact]), align="C")
+    pdf.set_y(y0 + 3 * cell + 8)
+
+    # 4) Organigrama del equipo (plantilla).
+    pdf.set_text_color(20, 20, 20)
+    pdf.set_font("Helvetica", "B", 11)
+    _mc(pdf, 6, "Organigrama del equipo (plantilla)")
+    bw, bh = 50, 9
+    top_x = pdf.l_margin + (190 - bw) / 2
+    top_y = pdf.get_y()
+    pdf.set_draw_color(*BRAND)
+    pdf.set_fill_color(*BRAND)
+    pdf.rect(top_x, top_y, bw, bh, "F")
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_xy(top_x, top_y + 1.5)
+    pdf.cell(bw, 6, _latin1(ORG_ROOT), align="C")
+    cw = 44
+    n = len(ORG_CHILDREN)
+    total_w = n * cw + (n - 1) * 4
+    cx0 = pdf.l_margin + (190 - total_w) / 2
+    cy = top_y + bh + 12
+    pdf.set_draw_color(150, 160, 180)
+    pdf.line(top_x + bw / 2, top_y + bh, top_x + bw / 2, cy - 6)
+    pdf.set_font("Helvetica", "", 8)
+    for i, name in enumerate(ORG_CHILDREN):
+        bx = cx0 + i * (cw + 4)
+        pdf.line(top_x + bw / 2, cy - 6, bx + cw / 2, cy - 6)
+        pdf.line(bx + cw / 2, cy - 6, bx + cw / 2, cy)
+        pdf.set_fill_color(230, 233, 240)
+        pdf.rect(bx, cy, cw, bh, "F")
+        pdf.set_text_color(40, 40, 40)
+        pdf.set_xy(bx, cy + 1.5)
+        pdf.cell(cw, 6, _latin1(name), align="C")
+    pdf.set_y(cy + bh + 4)
 
 
 def _pdf_markdown(pdf, md: str) -> None:
