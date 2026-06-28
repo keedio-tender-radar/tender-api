@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     # Gate de acceso al dashboard. Vacío = sin gate (acceso libre, comportamiento actual).
     dashboard_password: str = ""
 
+    # Logo de Keedio para los documentos generados (descargado y embebido; webp→png en runtime).
+    keedio_logo_url: str = "https://keedio.com/images/Logo_keedio_hu_cd4a97c7d0e86e82.webp"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property
