@@ -35,7 +35,14 @@ from tender_api.schemas import (
     score_to_contract,
     tender_to_contract,
 )
-from tender_api.services import analysis_client, doc_client, semaphore, storage, visual_rag_client
+from tender_api.services import (
+    analysis_client,
+    doc_client,
+    docgen,
+    semaphore,
+    storage,
+    visual_rag_client,
+)
 from tender_api.services.learning import learning_insights
 
 router = APIRouter(prefix="/api/tenders", tags=["tenders"])
@@ -1051,6 +1058,44 @@ def download_package_md(tender_id: str, session: Session = Depends(get_session))
         headers={
             "Content-Disposition": f'attachment; filename="{_slug(tender.title)}-paquete.md"'
         },
+    )
+
+
+def _drafts_for(session: Session, tender_id: str) -> list[GeneratedDocument]:
+    return session.scalars(
+        select(GeneratedDocument)
+        .where(GeneratedDocument.tender_id == tender_id)
+        .order_by(GeneratedDocument.created_at)
+    ).all()
+
+
+@router.get("/{tender_id}/package.docx")
+def download_package_docx(tender_id: str, session: Session = Depends(get_session)) -> Response:
+    """Paquete de oferta en Word (.docx) con marca Keedio, tablas y figura del scoring."""
+    tender = _get_or_404(session, tender_id)
+    data = docgen.build_docx(
+        tender, _drafts_for(session, tender_id), _latest_score(session, tender_id)
+    )
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            "Content-Disposition": f'attachment; filename="{_slug(tender.title)}-oferta.docx"'
+        },
+    )
+
+
+@router.get("/{tender_id}/package.pdf")
+def download_package_pdf(tender_id: str, session: Session = Depends(get_session)) -> Response:
+    """Paquete de oferta en PDF con marca Keedio, tablas y figura del scoring."""
+    tender = _get_or_404(session, tender_id)
+    data = docgen.build_pdf(
+        tender, _drafts_for(session, tender_id), _latest_score(session, tender_id)
+    )
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{_slug(tender.title)}-oferta.pdf"'},
     )
 
 
