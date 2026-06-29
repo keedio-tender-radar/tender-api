@@ -20,6 +20,7 @@ from tender_api.database import get_session
 from tender_api.models import (
     DailySnapshot,
     GeneratedDocument,
+    RunLog,
     Tender,
     TenderAction,
     TenderDecision,
@@ -430,6 +431,7 @@ def create_daily_snapshot(
     else:
         row = DailySnapshot(snapshot_date=today, items=items, count=len(items))
         session.add(row)
+    session.add(RunLog(job="snapshot", status="ok", count=len(items)))
     session.commit()
     number = session.scalar(select(func.count()).select_from(DailySnapshot)) or 0
     return {"date": today.isoformat(), "number": number, "count": len(items), "items": items}
