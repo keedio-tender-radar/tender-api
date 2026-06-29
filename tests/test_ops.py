@@ -37,3 +37,22 @@ def test_profile_has_thresholds(client):
     p = client.get("/api/profile").json()
     assert p["go_threshold"] == 80
     assert p["revisar_threshold"] == 40
+
+
+def test_saved_alerts_crud_and_matches(client):
+    from tests.conftest import full_breakdown, make_tender
+    # crea alerta CPV 72 score>=70
+    a = client.post("/api/alerts", json={"name": "TI alto", "min_score": 70, "cpv_prefix": "72"})
+    assert a.status_code == 201
+    assert client.get("/api/alerts").json()[0]["name"] == "TI alto"
+    # licitación que cumple
+    t = make_tender(client)
+    bd = full_breakdown()
+    client.put(f"/api/tenders/{t['id']}/score",
+               json={"total": sum(bd.values()), "breakdown": bd, "recommendation": "go"})
+    m = client.get("/api/alerts/matches?days=2").json()
+    assert any(x["tender"]["id"] == t["id"] and "TI alto" in x["alerts"] for x in m)
+    # borra
+    aid = client.get("/api/alerts").json()[0]["id"]
+    assert client.delete(f"/api/alerts/{aid}").status_code == 204
+    assert client.get("/api/alerts").json() == []

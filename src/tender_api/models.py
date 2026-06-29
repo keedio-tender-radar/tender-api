@@ -197,6 +197,23 @@ class TenderNote(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class SavedAlert(Base):
+    """Búsqueda guardada: notifica licitaciones que cumplan estos criterios (alerta a medida)."""
+
+    __tablename__ = "saved_alerts"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String)
+    enabled: Mapped[bool] = mapped_column(default=True)
+    min_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cpv_prefix: Mapped[str | None] = mapped_column(String, nullable=True)
+    min_budget: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source: Mapped[str | None] = mapped_column(String, nullable=True)
+    traffic_light: Mapped[str | None] = mapped_column(String, nullable=True)
+    q: Mapped[str | None] = mapped_column(String, nullable=True)  # subcadena en el título
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class RunLog(Base):
     """Registro de ejecución de un job/cron (observabilidad): ingesta, análisis, digest…"""
 
