@@ -26,6 +26,8 @@ dependencies = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Las migraciones de Alembic se autogeneran; no se lint-ean (líneas largas inevitables).
+extend-exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
