@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tender_api.database import get_session
-from tender_api.models import ScoringProfile, TenderDecision, TenderScore
+from tender_api.models import RunLog, ScoringProfile, TenderDecision, TenderScore
 
 _WON = {"ganada", "won", "adjudicada", "adjudicado"}
 _LOST = {"perdida", "lost", "no_adjudicada", "desestimada"}
@@ -138,6 +138,11 @@ def recalibrate(apply: bool = True, session: Session = Depends(get_session)) -> 
         "revisar_threshold": row.revisar_threshold or 40,
     }
     if len(won) < 3:
+        session.add(RunLog(
+            job="recalibracion", status="ok", count=len(won),
+            detail=f"sin cambios: {len(won)} ganadas (mín. 3)",
+        ))
+        session.commit()
         return {"applied": False, "reason": "insuficientes decisiones ganadas (mín. 3)",
                 "won": len(won), "lost": len(lost), **current}
 
@@ -148,6 +153,11 @@ def recalibrate(apply: bool = True, session: Session = Depends(get_session)) -> 
 
     if apply:
         row.go_threshold, row.revisar_threshold = go, revisar
-        session.commit()
+    session.add(RunLog(
+        job="recalibracion", status="ok", count=len(won),
+        detail=f"{'aplicado' if apply else 'propuesto'} GO≥{go}/Revisar≥{revisar} "
+               f"({len(won)} ganadas, {len(lost)} perdidas)",
+    ))
+    session.commit()
     return {"applied": apply, "won": len(won), "lost": len(lost),
             "previous": current, **proposed}
