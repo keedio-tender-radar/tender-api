@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # Gate de acceso al dashboard. Vacío = sin gate (acceso libre, comportamiento actual).
     dashboard_password: str = ""
 
+    # Telegram para alertas de observabilidad (fallos de cron). Vacío = sin alerta.
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+
     # Logo de Keedio para los documentos generados (descargado y embebido; webp→png en runtime).
     keedio_logo_url: str = "https://keedio.com/images/Logo_keedio_hu_cd4a97c7d0e86e82.webp"
 

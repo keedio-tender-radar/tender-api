@@ -14,6 +14,10 @@ _COLUMN_MIGRATIONS = [
     ("scoring_profile", "project_months", "INTEGER"),
     ("scoring_profile", "hourly_rate", "DOUBLE PRECISION"),
     ("scoring_profile", "margin", "DOUBLE PRECISION"),
+    ("scoring_profile", "go_threshold", "INTEGER"),
+    ("scoring_profile", "revisar_threshold", "INTEGER"),
+    ("tenders", "document_text", "VARCHAR"),
+    ("tenders", "document_extracted_at", "TIMESTAMPTZ"),
 ]
 
 

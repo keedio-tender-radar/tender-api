@@ -52,6 +52,11 @@ class Tender(Base):
     status: Mapped[str] = mapped_column(String, default="discovered", index=True)
     # Si es duplicada de otra fuente, apunta a la licitación "canónica" (se excluye de las vistas).
     duplicate_of: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # Texto del pliego extraído (cache): evita re-extraer en cada análisis/borrador/plan.
+    document_text: Mapped[str | None] = mapped_column(String, nullable=True)
+    document_extracted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
@@ -127,6 +132,9 @@ class ScoringProfile(Base):
     project_months: Mapped[int] = mapped_column(Integer, default=6)  # duración (cronograma)
     hourly_rate: Mapped[float] = mapped_column(Float, default=45.0)  # €/hora (estimación)
     margin: Mapped[float] = mapped_column(Float, default=0.2)  # margen comercial (0..1)
+    # Umbrales de recomendación (recalibrables desde el histórico de decisiones).
+    go_threshold: Mapped[int] = mapped_column(Integer, default=80)
+    revisar_threshold: Mapped[int] = mapped_column(Integer, default=40)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
     )
@@ -187,6 +195,19 @@ class TenderNote(Base):
     author: Mapped[str | None] = mapped_column(String, nullable=True)
     body: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class RunLog(Base):
+    """Registro de ejecución de un job/cron (observabilidad): ingesta, análisis, digest…"""
+
+    __tablename__ = "run_logs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    job: Mapped[str] = mapped_column(String, index=True)
+    status: Mapped[str] = mapped_column(String, index=True)  # ok | error
+    detail: Mapped[str | None] = mapped_column(String, nullable=True)
+    count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
 
 
 class TenderAction(Base):

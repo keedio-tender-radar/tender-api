@@ -64,6 +64,33 @@ def _get_or_404(session: Session, tender_id: str) -> Tender:
     return row
 
 
+def _ics_escape(s: str) -> str:
+    return (
+        (s or "").replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", " ")
+    )
+
+
+def _pliego_text(session: Session, tender: Tender, refresh: bool = False) -> str | None:
+    """Texto del pliego, cacheado en tender.document_text. Lo extrae una vez y lo reutiliza.
+
+    Evita re-extraer en cada análisis/borrador/plan. `refresh=True` fuerza una nueva extracción.
+    """
+    if tender.document_text and not refresh:
+        return tender.document_text
+    if not doc_client.is_configured() or not tender.url:
+        return tender.document_text or None
+    try:
+        chunks = doc_client.extract(tender.url).get("chunks", [])
+    except httpx.HTTPError:
+        return tender.document_text or None
+    text = "\n".join(c.get("content", "") for c in chunks)[:20000] or None
+    if text:
+        tender.document_text = text
+        tender.document_extracted_at = datetime.now(UTC)
+        session.commit()
+    return text
+
+
 @router.post("", response_model=TenderContract, status_code=201)
 def ingest_tender(payload: TenderCreate, session: Session = Depends(get_session)):
     """Crea o actualiza una licitación. Idempotente por (source, source_id)."""
@@ -507,11 +534,88 @@ def extract_document(tender_id: str, session: Session = Depends(get_session)) ->
     return result
 
 
+@router.post("/{tender_id}/pliego")
+def extract_and_cache_pliego(tender_id: str, session: Session = Depends(get_session)) -> dict:
+    """Extrae el pliego y lo CACHEA en la licitación (reutilizado por análisis/borradores/plan)."""
+    tender = _get_or_404(session, tender_id)
+    if not doc_client.is_configured():
+        raise HTTPException(503, "tender-document-service no está configurado.")
+    if not tender.url:
+        raise HTTPException(422, "La licitación no tiene URL de documento.")
+    text = _pliego_text(session, tender, refresh=True)
+    return {
+        "cached": bool(text),
+        "chars": len(text or ""),
+        "extracted_at": tender.document_extracted_at.isoformat()
+        if tender.document_extracted_at
+        else None,
+    }
+
+
+@router.get("/services")
+def services_status() -> dict:
+    """Estado de los servicios externos (doc-service, análisis, visual-rag, LLM)."""
+    out = {
+        "doc_service": doc_client.is_configured(),
+        "analysis_service": analysis_client.is_configured(),
+        "visual_rag": bool(settings.visual_rag_url),
+        "llm": None,
+    }
+    if analysis_client.is_configured():
+        try:
+            base = settings.analysis_service_url.rstrip("/")
+            h = httpx.get(f"{base}/health", timeout=8).json()
+            out["llm"] = bool(h.get("llm_enabled"))
+            out["llm_models"] = h.get("llm_models")
+        except (httpx.HTTPError, ValueError):
+            out["llm"] = None
+    return out
+
+
+@router.get("/calendar.ics")
+def calendar_ics(session: Session = Depends(get_session)) -> Response:
+    """Calendario (.ics) con los cierres de las licitaciones activas (suscribible)."""
+    now = datetime.now(UTC)
+    rows = session.scalars(
+        select(Tender).where(Tender.duplicate_of.is_(None), Tender.deadline.is_not(None))
+    ).all()
+    lines = [
+        "BEGIN:VCALENDAR", "VERSION:2.0",
+        "PRODID:-//Keedio//Tender Radar//ES", "CALSCALE:GREGORIAN",
+    ]
+    for t in rows:
+        dl = _aware(t.deadline)
+        if dl < now - timedelta(days=1):
+            continue
+        score = _latest_score(session, t.id)
+        tag = f"[{score.recommendation.upper()}] " if score else ""
+        stamp = dl.strftime("%Y%m%dT%H%M%SZ")
+        lines += [
+            "BEGIN:VEVENT",
+            f"UID:tender-{t.id}@keedio",
+            f"DTSTAMP:{now.strftime('%Y%m%dT%H%M%SZ')}",
+            f"DTSTART:{stamp}",
+            f"DTEND:{stamp}",
+            f"SUMMARY:{_ics_escape(tag + (t.title or 'Licitación'))}",
+            f"DESCRIPTION:{_ics_escape((t.buyer or '') + ' · ' + (t.url or ''))}",
+            "BEGIN:VALARM",
+            "TRIGGER:-P3D",
+            "ACTION:DISPLAY",
+            "DESCRIPTION:Cierre de licitación en 3 días",
+            "END:VALARM",
+            "END:VEVENT",
+        ]
+    lines.append("END:VCALENDAR")
+    return Response(
+        content="\r\n".join(lines),
+        media_type="text/calendar; charset=utf-8",
+        headers={"Content-Disposition": 'inline; filename="tender-radar.ics"'},
+    )
+
+
 def _reanalyze_one(session: Session, tender: Tender) -> TenderScore:
     """Extrae el pliego, re-puntúa con su contenido y persiste el score. Lanza httpx.HTTPError."""
-    extraction = doc_client.extract(tender.url)
-    chunks = extraction.get("chunks", [])
-    document_text = "\n".join(c.get("content", "") for c in chunks)[:20000]
+    document_text = _pliego_text(session, tender, refresh=True)
     result = analysis_client.analyze(
         tender_to_contract(tender).model_dump(mode="json"), document_text
     )
@@ -926,13 +1030,7 @@ def mark_interesting(tender_id: str, session: Session = Depends(get_session)) ->
 
 def _generate_and_store_drafts(session: Session, tender: Tender) -> list[GeneratedDocument]:
     """Genera (extrae pliego → ai-analysis) y persiste los borradores, reemplazando los previos."""
-    document_text = None
-    if doc_client.is_configured() and tender.url:
-        try:
-            chunks = doc_client.extract(tender.url).get("chunks", [])
-            document_text = "\n".join(c.get("content", "") for c in chunks)[:20000] or None
-        except httpx.HTTPError:
-            document_text = None
+    document_text = _pliego_text(session, tender)
 
     score = _latest_score(session, tender.id)
     score_payload = score_to_contract(score).model_dump(mode="json") if score else None

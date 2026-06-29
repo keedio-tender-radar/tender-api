@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from tender_api.config import settings
 from tender_api.database import init_db
-from tender_api.routers import actions, auth, profile, scores, tenders
+from tender_api.routers import actions, auth, profile, runs, scores, tenders
 
 
 @asynccontextmanager
@@ -31,6 +31,7 @@ app.include_router(scores.router)
 app.include_router(actions.router)
 app.include_router(profile.router)
 app.include_router(auth.router)
+app.include_router(runs.router)
 
 
 @app.get("/health", tags=["meta"])
