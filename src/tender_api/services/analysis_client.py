@@ -29,12 +29,20 @@ def analyze(tender: dict, document_text: str | None) -> dict:
         return resp.json()
 
 
-def generate_drafts(tender: dict, document_text: str | None, score: dict | None) -> dict:
+def generate_drafts(
+    tender: dict, document_text: str | None, score: dict | None,
+    market_context: dict | None = None,
+) -> dict:
     """Devuelve {drafts:[{kind,title,content}]} con los borradores de oferta."""
     with _client() as client:
         resp = client.post(
             "/generate-drafts",
-            json={"tender": tender, "document_text": document_text, "score": score},
+            json={
+                "tender": tender,
+                "document_text": document_text,
+                "score": score,
+                "market_context": market_context,
+            },
         )
         resp.raise_for_status()
         return resp.json()

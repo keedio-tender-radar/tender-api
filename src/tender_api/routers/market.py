@@ -231,13 +231,9 @@ def overview(session: Session = Depends(get_session)) -> dict:
     }
 
 
-@router.get("/tender/{tender_id}/context")
-def tender_market_context(tender_id: str, session: Session = Depends(get_session)) -> dict:
-    """Contexto competitivo de UNA licitación: quién suele ganar su categoría y baja esperada."""
-    tender = session.get(Tender, tender_id)
-    if tender is None:
-        raise HTTPException(404, "Licitación no encontrada")
-    division = _cpv_division(tender.cpv)
+def compute_context(session: Session, cpv: list[str] | None) -> dict:
+    """Contexto competitivo de una categoría CPV (reutilizado por la ruta y por los borradores)."""
+    division = _cpv_division(cpv)
     rows = _filtered_awards(session, division, None)
     price = _pricing(rows)
     return {
@@ -247,3 +243,12 @@ def tender_market_context(tender_id: str, session: Session = Depends(get_session
         "expected_baja": price["avg_baja"],
         "avg_awarded": price["avg_awarded"],
     }
+
+
+@router.get("/tender/{tender_id}/context")
+def tender_market_context(tender_id: str, session: Session = Depends(get_session)) -> dict:
+    """Contexto competitivo de UNA licitación: quién suele ganar su categoría y baja esperada."""
+    tender = session.get(Tender, tender_id)
+    if tender is None:
+        raise HTTPException(404, "Licitación no encontrada")
+    return compute_context(session, tender.cpv)

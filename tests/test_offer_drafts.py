@@ -11,6 +11,10 @@ def test_generate_and_list_offer_drafts(client, monkeypatch):
 
     def ai_handler(req: httpx.Request) -> httpx.Response:
         assert req.url.path == "/generate-drafts"
+        # La API adjunta el contexto de mercado (MVP-5) para la estrategia de puja.
+        import json
+
+        assert "market_context" in json.loads(req.content)
         return httpx.Response(
             200,
             json={
