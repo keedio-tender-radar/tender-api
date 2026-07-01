@@ -38,3 +38,14 @@ def generate_drafts(tender: dict, document_text: str | None, score: dict | None)
         )
         resp.raise_for_status()
         return resp.json()
+
+
+def answer(question: str, chunks: list[dict]) -> dict:
+    """Chat documental: síntesis anclada a los fragmentos.
+
+    Devuelve {answer, grounded, generated_by}.
+    """
+    with _client() as client:
+        resp = client.post("/answer", json={"question": question, "chunks": chunks})
+        resp.raise_for_status()
+        return resp.json()

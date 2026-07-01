@@ -21,6 +21,7 @@ __all__ = [
     "TenderAction",
     "TenderDecision",
     "TenderDocument",
+    "TenderChunk",
     "GeneratedDocument",
 ]
 
@@ -75,6 +76,9 @@ class Tender(Base):
         back_populates="tender", cascade="all, delete-orphan"
     )
     files: Mapped[list[TenderDocument]] = relationship(
+        back_populates="tender", cascade="all, delete-orphan"
+    )
+    chunks: Mapped[list[TenderChunk]] = relationship(
         back_populates="tender", cascade="all, delete-orphan"
     )
 
@@ -155,6 +159,27 @@ class TenderDocument(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     tender: Mapped[Tender] = relationship(back_populates="files")
+
+
+class TenderChunk(Base):
+    """Fragmento del pliego para el chat documental (RAG por expediente, ADR-004).
+
+    Se cachea el troceado del pliego para no re-extraer en cada pregunta. La recuperación
+    filtra SIEMPRE por `tender_id` (sin contaminación entre expedientes). `document_id` es
+    opcional: enlaza al binario original (`tender_documents`) cuando se conoce.
+    """
+
+    __tablename__ = "tender_chunks"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    tender_id: Mapped[str] = mapped_column(ForeignKey("tenders.id"), index=True)
+    document_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    ordinal: Mapped[int] = mapped_column(Integer, default=0)
+    section: Mapped[str | None] = mapped_column(String, nullable=True)
+    content: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    tender: Mapped[Tender] = relationship(back_populates="chunks")
 
 
 class GeneratedDocument(Base):

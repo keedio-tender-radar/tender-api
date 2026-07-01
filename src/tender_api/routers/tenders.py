@@ -23,6 +23,7 @@ from tender_api.models import (
     RunLog,
     Tender,
     TenderAction,
+    TenderChunk,
     TenderDecision,
     TenderDocument,
     TenderNote,
@@ -693,7 +694,11 @@ def reanalyze(tender_id: str, session: Session = Depends(get_session)):
 
 
 def _rank_chunks(question: str, chunks: list[dict], top_k: int) -> list[dict]:
-    """QA extractivo: ordena los fragmentos por solape de palabras con la pregunta."""
+    """Recuperación léxica: ordena los fragmentos por solape de palabras con la pregunta.
+
+    Si ninguno solapa (pregunta muy abierta), devuelve los primeros `top_k` para que el
+    sintetizador siempre tenga algo de contexto del expediente.
+    """
     qwords = {w for w in re.findall(r"\w+", question.lower()) if len(w) > 2}
     scored = []
     for c in chunks:
@@ -701,25 +706,63 @@ def _rank_chunks(question: str, chunks: list[dict], top_k: int) -> list[dict]:
         overlap = len(qwords & cwords)
         if overlap:
             scored.append((overlap, c))
+    if not scored:
+        return chunks[:top_k]
     scored.sort(key=lambda x: x[0], reverse=True)
     return [c for _, c in scored[:top_k]]
 
 
+def _get_or_build_chunks(session: Session, tender: Tender) -> list[dict]:
+    """Fragmentos del pliego para el chat (RAG por expediente, ADR-004).
+
+    Devuelve los `tender_chunks` persistidos; si aún no existen, los construye una vez vía
+    doc-service (troceado) y los cachea. Así no se re-extrae el pliego en cada pregunta.
+    """
+    rows = session.scalars(
+        select(TenderChunk).where(TenderChunk.tender_id == tender.id).order_by(TenderChunk.ordinal)
+    ).all()
+    if rows:
+        return [{"ordinal": r.ordinal, "section": r.section, "content": r.content} for r in rows]
+
+    if not (doc_client.is_configured() and tender.url):
+        return []
+    try:
+        extracted = doc_client.extract(tender.url).get("chunks", [])
+    except httpx.HTTPError:
+        return []
+
+    chunks: list[dict] = []
+    for i, c in enumerate(extracted):
+        content = (c.get("content") or "").strip()
+        if not content:
+            continue
+        ordinal = c.get("ordinal", i)
+        section = c.get("section")
+        session.add(
+            TenderChunk(
+                tender_id=tender.id, ordinal=ordinal, section=section, content=content
+            )
+        )
+        chunks.append({"ordinal": ordinal, "section": section, "content": content})
+    if chunks:
+        session.commit()
+    return chunks
+
+
 @router.post("/{tender_id}/ask")
 def ask(tender_id: str, payload: AskRequest, session: Session = Depends(get_session)) -> dict:
-    """Pregunta sobre el pliego. Usa tender-visual-rag si está configurado; si no, QA extractivo."""
+    """Chat documental sobre el pliego de UN expediente (RAG por expediente, ADR-004).
+
+    Recupera los fragmentos relevantes (cacheados en `tender_chunks`) filtrando por `tender_id`
+    y redacta la respuesta con citas `[n]` vía ai-analysis. Si hay un servicio visual-rag externo
+    (PixelRAG) configurado, se usa preferentemente. Sin ai-analysis, cae a modo extractivo.
+    """
     tender = _get_or_404(session, tender_id)
 
-    # Texto del pliego (si doc-service está disponible): sirve al fallback extractivo y permite que
-    # visual-rag indice al vuelo si aún no pre-ingestó el expediente.
-    chunks: list[dict] = []
-    if doc_client.is_configured() and tender.url:
-        try:
-            chunks = doc_client.extract(tender.url).get("chunks", [])
-        except httpx.HTTPError:
-            chunks = []
+    chunks = _get_or_build_chunks(session, tender)
     document_text = "\n".join(c.get("content", "") for c in chunks)[:20000] or None
 
+    # Backend externo opcional (RAG visual PixelRAG). Indexa al vuelo con document_text si falta.
     if visual_rag_client.is_configured():
         try:
             res = visual_rag_client.ask(payload.question, tender.id, payload.top_k, document_text)
@@ -728,25 +771,42 @@ def ask(tender_id: str, payload: AskRequest, session: Session = Depends(get_sess
         return {
             "backend": "visual-rag",
             "answer": res.get("answer"),
+            "grounded": True,
             "sources": res.get("sources") or res.get("hits") or [],
         }
 
-    # Fallback extractivo sobre el texto del pliego (doc-service).
-    if not doc_client.is_configured():
-        raise HTTPException(503, "Ni visual-rag ni doc-service configurados.")
-    if not tender.url:
-        raise HTTPException(422, "La licitación no tiene URL de documento.")
     if not chunks:
+        if not doc_client.is_configured():
+            raise HTTPException(503, "Ni visual-rag ni doc-service configurados.")
+        if not tender.url:
+            raise HTTPException(422, "La licitación no tiene URL de documento.")
         raise HTTPException(502, "No se pudo extraer el pliego.")
 
+    # Recuperación léxica filtrada por expediente + numeración de fuentes para las citas [n].
     top = _rank_chunks(payload.question, chunks, payload.top_k)
-    answer = top[0]["content"][:800] if top else None
+    sources = [
+        {"n": i + 1, "section": c.get("section"), "content": (c.get("content") or "")[:600]}
+        for i, c in enumerate(top)
+    ]
+
+    # Síntesis anclada con citas (ai-analysis). Si no está o falla, modo extractivo (trozo crudo).
+    if analysis_client.is_configured():
+        try:
+            res = analysis_client.answer(payload.question, sources)
+            return {
+                "backend": "rag",
+                "answer": res.get("answer"),
+                "grounded": bool(res.get("grounded")),
+                "sources": sources,
+            }
+        except httpx.HTTPError:
+            pass  # degradación elegante a extractivo
+
     return {
         "backend": "extractive",
-        "answer": answer,
-        "sources": [
-            {"section": c.get("section"), "content": c.get("content", "")[:600]} for c in top
-        ],
+        "answer": top[0]["content"][:800] if top else None,
+        "grounded": False,
+        "sources": sources,
     }
 
 
