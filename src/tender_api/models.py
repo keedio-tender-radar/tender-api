@@ -23,6 +23,7 @@ __all__ = [
     "TenderDocument",
     "TenderChunk",
     "GeneratedDocument",
+    "Award",
 ]
 
 
@@ -236,6 +237,34 @@ class SavedAlert(Base):
     source: Mapped[str | None] = mapped_column(String, nullable=True)
     traffic_light: Mapped[str | None] = mapped_column(String, nullable=True)
     q: Mapped[str | None] = mapped_column(String, nullable=True)  # subcadena en el título
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class Award(Base):
+    """Adjudicación/formalización pública (inteligencia de mercado, MVP-5).
+
+    Histórico de quién gana qué: adjudicatario + importe adjudicado vs presupuesto (baja),
+    órgano comprador y CPV. Alimenta competidores, pricing (baja media), compradores recurrentes
+    y CPV estratégicos. Independiente de `tenders` (histórico, no el radar abierto).
+    """
+
+    __tablename__ = "awards"
+    __table_args__ = (UniqueConstraint("source", "source_id", name="uq_award_source"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    source: Mapped[str] = mapped_column(String, index=True)
+    source_id: Mapped[str] = mapped_column(String, index=True)
+    title: Mapped[str | None] = mapped_column(String, nullable=True)
+    buyer: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    cpv: Mapped[list] = mapped_column(JSON, default=list)
+    # División CPV (2 dígitos) del CPV principal: agrupa por categoría estratégica.
+    cpv_division: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    budget_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    awarded_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    awarded_supplier: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    num_bidders: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    award_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    url: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
