@@ -16,6 +16,19 @@ _PLIEGO_CHUNKS = {
 }
 
 
+def test_rank_chunks_bm25_prefers_rare_term():
+    from tender_api.routers.tenders import _rank_chunks
+
+    # "solvencia" es raro (1 doc) → ese chunk debe rankear primero pese a que "el/de" son comunes.
+    chunks = [
+        {"content": "el objeto de la plataforma de datos y de la de gestion"},
+        {"content": "el pliego exige solvencia tecnica de tres proyectos"},
+        {"content": "el plazo de ejecucion de la de servicios"},
+    ]
+    top = _rank_chunks("¿qué solvencia técnica exige?", chunks, 1)
+    assert "solvencia" in top[0]["content"]
+
+
 def test_ask_extractive_fallback(client, monkeypatch):
     # Sin visual-rag → QA extractivo sobre los chunks del doc-service.
     monkeypatch.setattr(settings, "visual_rag_url", "")

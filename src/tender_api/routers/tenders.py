@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import csv
 import io
+import math
 import re
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -705,19 +707,45 @@ def reanalyze(tender_id: str, session: Session = Depends(get_session)):
     return score_to_contract(row)
 
 
-def _rank_chunks(question: str, chunks: list[dict], top_k: int) -> list[dict]:
-    """Recuperación léxica: ordena los fragmentos por solape de palabras con la pregunta.
+def _tokens(text: str) -> list[str]:
+    return [w for w in re.findall(r"\w+", (text or "").lower()) if len(w) > 2]
 
-    Si ninguno solapa (pregunta muy abierta), devuelve los primeros `top_k` para que el
-    sintetizador siempre tenga algo de contexto del expediente.
+
+def _rank_chunks(question: str, chunks: list[dict], top_k: int) -> list[dict]:
+    """Recuperación BM25: pondera cada término por rareza (IDF) y frecuencia normalizada.
+
+    Mejor que el mero solape: los términos distintivos del pliego (p. ej. "solvencia") pesan más
+    que los comunes. Si nada puntúa (pregunta muy abierta), devuelve los primeros `top_k` para que
+    el sintetizador siempre tenga contexto del expediente.
     """
-    qwords = {w for w in re.findall(r"\w+", question.lower()) if len(w) > 2}
-    scored = []
-    for c in chunks:
-        cwords = {w for w in re.findall(r"\w+", (c.get("content") or "").lower()) if len(w) > 2}
-        overlap = len(qwords & cwords)
-        if overlap:
-            scored.append((overlap, c))
+    docs = [_tokens(c.get("content") or "") for c in chunks]
+    q = set(_tokens(question))
+    n = len(docs)
+    if not q or n == 0 or not any(docs):
+        return chunks[:top_k]
+
+    avgdl = sum(len(d) for d in docs) / n or 1.0
+    df: dict[str, int] = {}
+    for d in docs:
+        for t in set(d) & q:
+            df[t] = df.get(t, 0) + 1
+
+    k1, b = 1.5, 0.75
+    scored: list[tuple[float, dict]] = []
+    for c, d in zip(chunks, docs, strict=False):
+        if not d:
+            continue
+        tf = Counter(d)
+        dl = len(d)
+        s = 0.0
+        for t in q:
+            f = tf.get(t, 0)
+            if not f:
+                continue
+            idf = math.log(1 + (n - df[t] + 0.5) / (df[t] + 0.5))
+            s += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * dl / avgdl))
+        if s > 0:
+            scored.append((s, c))
     if not scored:
         return chunks[:top_k]
     scored.sort(key=lambda x: x[0], reverse=True)
