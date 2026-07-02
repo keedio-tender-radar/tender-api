@@ -171,6 +171,7 @@ def _pricing(rows: list[Award]) -> dict:
         (r.budget_amount, r.awarded_amount)
         for r in rows
         if r.budget_amount and r.budget_amount > 0 and r.awarded_amount is not None
+        and r.awarded_amount <= r.budget_amount  # baja real (excluye mismatch de escala/sobrecoste)
     ]
     bajas = [_baja(b, a) for b, a in pairs]
     budgets = [b for b, _ in pairs]
