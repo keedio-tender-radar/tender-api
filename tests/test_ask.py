@@ -156,6 +156,36 @@ def test_ask_rag_synthesis_with_citations(client, monkeypatch):
     assert captured["chunks"][0]["n"] == 1
 
 
+def test_reembed_chunks_backfills(client, monkeypatch):
+    monkeypatch.setattr(settings, "doc_service_url", "http://doc")
+    monkeypatch.setattr(settings, "analysis_service_url", "http://ai")
+
+    def doc_handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_PLIEGO_CHUNKS)
+
+    def ai_handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/embed":  # al construir: embeddings desactivados → chunks sin vector
+            return httpx.Response(200, json={"embeddings": None})
+        return httpx.Response(200, json={"answer": "x", "grounded": False, "generated_by": "t"})
+
+    monkeypatch.setattr(
+        doc_client, "_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(doc_handler), base_url="http://doc"),
+    )
+    monkeypatch.setattr(
+        analysis_client, "_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(ai_handler), base_url="http://ai"),
+    )
+    t = make_tender(client, url="https://t/p.html")
+    client.post(f"/api/tenders/{t['id']}/ask", json={"question": "solvencia"})  # construye chunks
+
+    # Ahora los embeddings sí funcionan → el re-embed rellena los 2 chunks.
+    monkeypatch.setattr(analysis_client, "embed", lambda texts: [[0.1, 0.2] for _ in texts])
+    r = client.post("/api/tenders/reembed-chunks").json()
+    assert r["embedded"] == 2
+    assert r["remaining"] == 0
+
+
 def test_ask_caches_chunks_across_questions(client, monkeypatch):
     # La segunda pregunta reutiliza los tender_chunks cacheados: no re-extrae el pliego.
     monkeypatch.setattr(settings, "visual_rag_url", "")

@@ -823,6 +823,38 @@ def _get_or_build_chunks(session: Session, tender: Tender) -> list[dict]:
     ]
 
 
+@router.post("/reembed-chunks")
+def reembed_chunks(
+    session: Session = Depends(get_session),
+    limit: int = Query(default=200, ge=1, le=2000),
+    x_run_token: str = Header(default=""),
+) -> dict:
+    """Rellena embeddings de los `tender_chunks` que aún no los tienen (sin re-extraer el pliego).
+
+    Para migrar los chunks cacheados antes de activar el RAG semántico. Idempotente: procesa solo
+    los que tienen `embedding` NULL, en lotes; se puede llamar varias veces hasta agotar.
+    """
+    if settings.run_token and x_run_token != settings.run_token:
+        raise HTTPException(401, "run token inválido")
+    if not analysis_client.is_configured():
+        raise HTTPException(503, "analysis-service no configurado.")
+    rows = session.scalars(
+        select(TenderChunk).where(TenderChunk.embedding.is_(None)).limit(limit)
+    ).all()
+    if not rows:
+        return {"embedded": 0, "remaining": 0}
+    vectors = analysis_client.embed([r.content for r in rows])
+    if not vectors or len(vectors) != len(rows):
+        raise HTTPException(502, "Embeddings no disponibles (¿EMBEDDING_MODEL configurado?).")
+    for row, vec in zip(rows, vectors, strict=False):
+        row.embedding = vec
+    session.commit()
+    remaining = session.scalar(
+        select(func.count()).select_from(TenderChunk).where(TenderChunk.embedding.is_(None))
+    )
+    return {"embedded": len(rows), "remaining": remaining}
+
+
 @router.post("/{tender_id}/ask")
 def ask(tender_id: str, payload: AskRequest, session: Session = Depends(get_session)) -> dict:
     """Chat documental sobre el pliego de UN expediente (RAG por expediente, ADR-004).
