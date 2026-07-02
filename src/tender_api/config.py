@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
+    # Email (InsForge send-raw). Requiere plan de pago InsForge + DIGEST_EMAIL_TO configurado.
+    insforge_api_url: str = ""  # p. ej. https://vz4wf92x.eu-central.insforge.app
+    insforge_anon_key: str = ""
+    digest_email_to: str = ""  # destinatario(s) del informe por email (coma-separados)
+
     # Logo de Keedio para los documentos generados (descargado y embebido; webp→png en runtime).
     keedio_logo_url: str = "https://keedio.com/images/Logo_keedio_hu_cd4a97c7d0e86e82.webp"
 

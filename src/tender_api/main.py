@@ -13,6 +13,7 @@ from tender_api.routers import (
     auth,
     market,
     profile,
+    reports,
     runs,
     scores,
     tenders,
@@ -43,6 +44,7 @@ app.include_router(auth.router)
 app.include_router(runs.router)
 app.include_router(alerts.router)
 app.include_router(market.router)
+app.include_router(reports.router)
 
 
 @app.get("/health", tags=["meta"])
