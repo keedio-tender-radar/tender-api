@@ -1109,7 +1109,8 @@ def _generate_and_store_drafts(session: Session, tender: Tender) -> list[Generat
     score = _latest_score(session, tender.id)
     score_payload = score_to_contract(score).model_dump(mode="json") if score else None
     # Contexto de mercado (MVP-5) → estrategia de puja en los borradores (MVP-6).
-    market_context = market.compute_context(session, tender.cpv)
+    # Con buyer: incluye el incumbente (adjudicatario del último contrato del órgano).
+    market_context = market.compute_context(session, tender.cpv, buyer=tender.buyer)
     result = analysis_client.generate_drafts(
         tender_to_contract(tender).model_dump(mode="json"), document_text, score_payload,
         market_context=market_context,
