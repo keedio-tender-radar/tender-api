@@ -141,34 +141,68 @@ def _parse_table(lines: list[str], i: int) -> tuple[list[list[str]], int]:
 
 # ----------------------------- Word (.docx) -----------------------------
 
-def build_docx(tender, drafts, score, team=None, months=None, rate=None, margin=None) -> bytes:
-    from docx import Document
+def _docx_cover(doc, tender, score) -> None:
+    """Portada del entregable: marca, etiqueta, título, datos clave, valoración y sello."""
     from docx.shared import Inches, Pt, RGBColor
 
-    months = months or GANTT_MONTHS
-    phases = _scaled_phases(months)
-    doc = Document()
-
-    # Cabecera de marca: logo real si se puede descargar; si no, marca textual.
     logo = _logo_png(settings.keedio_logo_url)
     if logo:
-        doc.add_picture(BytesIO(logo), width=Inches(1.9))
+        doc.add_picture(BytesIO(logo), width=Inches(2.1))
     else:
         h = doc.add_paragraph()
         run = h.add_run("KEEDIO")
         run.bold = True
-        run.font.size = Pt(22)
+        run.font.size = Pt(24)
         run.font.color.rgb = RGBColor(*BRAND)
-    sub = doc.add_paragraph()
-    sr = sub.add_run("Tender Radar · Paquete de oferta")
-    sr.font.size = Pt(11)
-    sr.font.color.rgb = RGBColor(0x80, 0x80, 0x80)
-    doc.add_heading(tender.title or "(sin título)", level=1)
+
+    label = doc.add_paragraph()
+    lr = label.add_run("PAQUETE DE OFERTA")
+    lr.bold = True
+    lr.font.size = Pt(12)
+    lr.font.color.rgb = RGBColor(*BRAND)
+
+    title = doc.add_paragraph()
+    tr = title.add_run(tender.title or "(sin título)")
+    tr.bold = True
+    tr.font.size = Pt(24)
+
     meta = doc.add_paragraph()
     meta.add_run(
-        f"Expediente: {tender.source_id} · Fuente: {tender.source} · "
-        f"Presupuesto: {tender.budget_amount or 's/d'} {tender.currency}"
+        f"Expediente {tender.source_id} · Fuente {tender.source}\n"
+        f"Presupuesto de licitación: {tender.budget_amount or 's/d'} {tender.currency}"
     ).italic = True
+
+    days = _days_remaining(getattr(tender, "deadline", None))
+    if days is not None:
+        dl = tender.deadline
+        ds = dl.date().isoformat() if hasattr(dl, "date") else str(dl)[:10]
+        doc.add_paragraph().add_run(
+            f"Plazo hasta presentación: {days} días (cierre {ds})"
+        ).italic = True
+
+    if score:
+        rec = doc.add_paragraph()
+        rr = rec.add_run(f"Valoración Go/No-Go: {score.total}/100 · {score.recommendation.upper()}")
+        rr.bold = True
+        rr.font.size = Pt(13)
+        rr.font.color.rgb = RGBColor(*BRAND)
+
+    stamp = doc.add_paragraph()
+    st = stamp.add_run(
+        f"Generado el {datetime.now(UTC).date().isoformat()} · Keedio Tender Radar · Confidencial"
+    )
+    st.font.size = Pt(9)
+    st.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+    doc.add_page_break()
+
+
+def build_docx(tender, drafts, score, team=None, months=None, rate=None, margin=None) -> bytes:
+    from docx import Document
+
+    months = months or GANTT_MONTHS
+    phases = _scaled_phases(months)
+    doc = Document()
+    _docx_cover(doc, tender, score)
 
     # Figura: desglose del scoring (tabla con barra).
     if score:
@@ -388,16 +422,85 @@ def _mc(pdf, h: float, txt: str) -> None:
     pdf.multi_cell(0, h, txt)
 
 
+def _pdf_cover(pdf, tender, score) -> None:
+    """Portada del entregable PDF: marca, etiqueta, título, datos clave, valoración y sello."""
+    pdf.add_page()
+    logo = _logo_png(settings.keedio_logo_url)
+    if logo:
+        try:
+            pdf.image(BytesIO(logo), x=pdf.l_margin, y=24, h=16)
+        except Exception:
+            pass
+    pdf.set_xy(pdf.l_margin, 96)
+    pdf.set_text_color(*BRAND)
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 6, "PAQUETE DE OFERTA", ln=1)
+    pdf.set_draw_color(*BRAND)
+    pdf.set_line_width(0.8)
+    pdf.line(pdf.l_margin, pdf.get_y() + 1, pdf.l_margin + 45, pdf.get_y() + 1)
+    pdf.set_line_width(0.2)
+    pdf.ln(8)
+    pdf.set_text_color(20, 20, 20)
+    pdf.set_font("Helvetica", "B", 24)
+    _mc(pdf, 11, _latin1(tender.title or "(sin titulo)"))
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "", 11)
+    pdf.set_text_color(90, 90, 90)
+    _mc(pdf, 6, _latin1(f"Expediente {tender.source_id}  -  Fuente {tender.source}"))
+    _mc(
+        pdf, 6,
+        _latin1(f"Presupuesto de licitacion: {tender.budget_amount or 's/d'} {tender.currency}"),
+    )
+    days = _days_remaining(getattr(tender, "deadline", None))
+    if days is not None:
+        dl = tender.deadline
+        ds = dl.date().isoformat() if hasattr(dl, "date") else str(dl)[:10]
+        _mc(pdf, 6, _latin1(f"Plazo hasta presentacion: {days} dias (cierre {ds})"))
+    if score:
+        pdf.ln(2)
+        pdf.set_text_color(*BRAND)
+        pdf.set_font("Helvetica", "B", 13)
+        _mc(
+            pdf, 7,
+            _latin1(f"Valoracion Go/No-Go: {score.total}/100 - {score.recommendation.upper()}"),
+        )
+    pdf.set_y(-28)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(150, 150, 150)
+    _mc(
+        pdf, 5,
+        _latin1(
+            f"Generado el {datetime.now(UTC).date().isoformat()}"
+            "  -  Keedio Tender Radar  -  Confidencial"
+        ),
+    )
+
+
 def build_pdf(tender, drafts, score, team=None, months=None, rate=None, margin=None) -> bytes:
     from fpdf import FPDF
 
+    class _OfferPDF(FPDF):
+        def footer(self) -> None:  # pie con paginación (salvo en la portada)
+            if self.page_no() <= 1:
+                return
+            self.set_y(-12)
+            self.set_draw_color(220, 224, 232)
+            self.set_line_width(0.2)
+            self.line(self.l_margin, self.get_y(), 210 - self.r_margin, self.get_y())
+            self.set_y(-10)
+            self.set_font("Helvetica", "", 7)
+            self.set_text_color(150, 150, 150)
+            self.cell(95, 5, _latin1("Confidencial - Keedio Tender Radar"), align="L", ln=0)
+            self.cell(95, 5, f"Pag. {self.page_no() - 1}", align="R", ln=1)
+
     months = months or GANTT_MONTHS
     phases = _scaled_phases(months)
-    pdf = FPDF()
+    pdf = _OfferPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
+    _pdf_cover(pdf, tender, score)
     pdf.add_page()
 
-    # Cabecera: logo real si se puede descargar; si no, barra de marca con texto.
+    # Cabecera de marca (breve) en la primera página de contenido.
     logo = _logo_png(settings.keedio_logo_url)
     if logo:
         try:
@@ -423,17 +526,7 @@ def build_pdf(tender, drafts, score, team=None, months=None, rate=None, margin=N
         pdf.cell(0, 10, "Tender Radar - Paquete de oferta", ln=1)
         pdf.ln(10)
 
-    pdf.set_text_color(20, 20, 20)
-    pdf.set_font("Helvetica", "B", 14)
-    _mc(pdf, 7, _latin1(tender.title or "(sin titulo)"))
-    pdf.set_font("Helvetica", "I", 9)
-    pdf.set_text_color(110, 110, 110)
-    _mc(
-        pdf, 5,
-        _latin1(f"Expediente: {tender.source_id} - Fuente: {tender.source} - "
-                f"Presupuesto: {tender.budget_amount or 's/d'} {tender.currency}"),
-    )
-    pdf.ln(3)
+    # (título y metadatos del expediente ya figuran en la portada)
 
     # Figura: barras del scoring.
     if score:
