@@ -135,6 +135,23 @@ def test_competitor_profile_404(client):
     assert client.get("/api/market/competitor", params={"name": "NoExiste"}).status_code == 404
 
 
+def test_market_concentration_hhi(client):
+    # Un solo adjudicatario acaparando → mercado concentrado (HHI alto).
+    client.post(
+        "/api/market/awards",
+        json=[
+            _award(source_id="H-1", awarded_supplier="Dominante", awarded_amount=900000),
+            _award(source_id="H-2", awarded_supplier="Pequeña", awarded_amount=100000),
+        ],
+    )
+    ov = client.get("/api/market/overview").json()
+    conc = ov["concentration"]
+    # HHI = 0.9² + 0.1² = 0.82 → concentrado
+    assert conc["hhi"] == 0.82
+    assert conc["label"] == "concentrado"
+    assert conc["competitors"] == 2
+
+
 def test_awards_csv_export(client):
     client.post(
         "/api/market/awards",

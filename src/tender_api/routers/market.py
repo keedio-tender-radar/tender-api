@@ -138,6 +138,25 @@ def _norm_supplier(name: str) -> str:
     return s or name.upper()
 
 
+def _hhi(rows: list[Award]) -> dict:
+    """Concentración del mercado (índice Herfindahl-Hirschman) por importe adjudicado.
+
+    HHI = Σ(cuota_i²) en [0,1]. Alto = dominado por pocos (incumbente fuerte); bajo = fragmentado
+    (más abierto a nuevos entrantes). Umbrales clásicos normalizados: <0.15 fragmentado,
+    0.15-0.25 moderado, >0.25 concentrado.
+    """
+    totals: dict[str, float] = defaultdict(float)
+    for r in rows:
+        if r.awarded_supplier and r.awarded_amount:
+            totals[_norm_supplier(r.awarded_supplier)] += r.awarded_amount
+    market = sum(totals.values())
+    if market <= 0 or not totals:
+        return {"hhi": None, "label": None, "competitors": len(totals)}
+    hhi = sum((v / market) ** 2 for v in totals.values())
+    label = "fragmentado" if hhi < 0.15 else "moderado" if hhi < 0.25 else "concentrado"
+    return {"hhi": round(hhi, 4), "label": label, "competitors": len(totals)}
+
+
 # --- Agregaciones puras (sin FastAPI): reutilizadas por las rutas y por overview/context. ---
 
 
@@ -296,6 +315,7 @@ def overview(session: Session = Depends(get_session)) -> dict:
         "awards": len(rows),
         "total_awarded": round(sum(r.awarded_amount or 0.0 for r in rows), 2),
         "avg_baja": _avg(bajas),
+        "concentration": _hhi(rows),
         "top_competitor": top_competitor[0] if top_competitor else None,
         "top_buyer": top_buyer[0] if top_buyer else None,
         "top_cpv_division": top_cpv[0] if top_cpv else None,
@@ -359,6 +379,7 @@ def compute_context(session: Session, cpv: list[str] | None) -> dict:
         "likely_winners": _competitors(rows, 5),
         "expected_baja": price["avg_baja"],
         "avg_awarded": price["avg_awarded"],
+        "concentration": _hhi(rows),
     }
 
 
