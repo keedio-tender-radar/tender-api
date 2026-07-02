@@ -7,6 +7,7 @@ CPV estratégicos. Es analítica sobre datos públicos; no influye en el scoring
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -115,15 +116,35 @@ def _avg(values: list[float]) -> float | None:
     return round(sum(values) / len(values), 4) if values else None
 
 
+_LEGAL_FORM = re.compile(r"\b(SLU|SAU|SLL|SLP|SL|SA|SCA|SCL|SCOOP|AIE|UTE)\b")
+
+
+def _norm_supplier(name: str) -> str:
+    """Clave para agrupar adjudicatarios: mayúsculas, sin puntuación ni forma jurídica.
+
+    Fusiona variantes de la misma empresa ("SEIDOR CONSULTING, SL" == "SEIDOR CONSULTING, S.L.").
+    """
+    s = name.upper().replace(".", "").replace(",", " ")
+    s = re.sub(r"\s+", " ", s).strip()
+    s = _LEGAL_FORM.sub("", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s or name.upper()
+
+
 # --- Agregaciones puras (sin FastAPI): reutilizadas por las rutas y por overview/context. ---
 
 
 def _competitors(rows: list[Award], limit: int) -> list[dict]:
-    agg: dict[str, dict] = defaultdict(lambda: {"wins": 0, "total_awarded": 0.0, "bajas": []})
+    # Agrupa por razón social normalizada (fusiona SL/S.L./…) mostrando el primer nombre visto.
+    agg: dict[str, dict] = defaultdict(
+        lambda: {"wins": 0, "total_awarded": 0.0, "bajas": [], "name": None}
+    )
     for r in rows:
         if not r.awarded_supplier:
             continue
-        a = agg[r.awarded_supplier]
+        a = agg[_norm_supplier(r.awarded_supplier)]
+        if a["name"] is None:
+            a["name"] = r.awarded_supplier
         a["wins"] += 1
         a["total_awarded"] += r.awarded_amount or 0.0
         b = _baja(r.budget_amount, r.awarded_amount)
@@ -131,12 +152,12 @@ def _competitors(rows: list[Award], limit: int) -> list[dict]:
             a["bajas"].append(b)
     items = [
         {
-            "supplier": name,
+            "supplier": v["name"],
             "wins": v["wins"],
             "total_awarded": round(v["total_awarded"], 2),
             "avg_baja": _avg(v["bajas"]),
         }
-        for name, v in agg.items()
+        for v in agg.values()
     ]
     items.sort(key=lambda x: (x["wins"], x["total_awarded"]), reverse=True)
     return items[:limit]

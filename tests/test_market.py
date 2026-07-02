@@ -97,3 +97,21 @@ def test_tender_market_context(client):
 
 def test_tender_market_context_404(client):
     assert client.get("/api/market/tender/nope/context").status_code == 404
+
+
+def test_competitor_name_normalization_merges_variants(client):
+    # "SEIDOR CONSULTING, SL" y "…, S.L." son la misma empresa → deben fusionarse en un competidor.
+    client.post(
+        "/api/market/awards",
+        json=[
+            _award(source_id="N-1", awarded_supplier="SEIDOR CONSULTING, SL",
+                   awarded_amount=1000),
+            _award(source_id="N-2", awarded_supplier="SEIDOR CONSULTING, S.L.",
+                   awarded_amount=2000),
+        ],
+    )
+    r = client.get("/api/market/competitors", params={"cpv_division": "72"})
+    comp = r.json()["competitors"]
+    seidor = [c for c in comp if "SEIDOR" in c["supplier"].upper()]
+    assert len(seidor) == 1
+    assert seidor[0]["wins"] == 2
