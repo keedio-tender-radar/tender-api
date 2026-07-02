@@ -368,8 +368,31 @@ def competitor_profile(
     }
 
 
-def compute_context(session: Session, cpv: list[str] | None) -> dict:
-    """Contexto competitivo de una categoría CPV (reutilizado por la ruta y por los borradores)."""
+def _incumbent(session: Session, buyer: str | None) -> dict | None:
+    """Adjudicatario del contrato más reciente de este órgano (el incumbente a batir)."""
+    if not buyer:
+        return None
+    awards = _filtered_awards(session, None, buyer)
+    awards = [a for a in awards if a.awarded_supplier]
+    if not awards:
+        return None
+    awards.sort(key=lambda a: a.award_date.isoformat() if a.award_date else "", reverse=True)
+    top = awards[0]
+    return {
+        "supplier": top.awarded_supplier,
+        "award_date": top.award_date.isoformat() if top.award_date else None,
+        "awarded_amount": top.awarded_amount,
+        "title": top.title,
+        "url": top.url,
+        "buyer_awards": len(awards),
+    }
+
+
+def compute_context(session: Session, cpv: list[str] | None, buyer: str | None = None) -> dict:
+    """Contexto competitivo de una categoría CPV (reutilizado por la ruta y por los borradores).
+
+    Con `buyer` añade el incumbente (adjudicatario del último contrato de ese órgano).
+    """
     division = _cpv_division(cpv)
     rows = _filtered_awards(session, division, None)
     price = _pricing(rows)
@@ -380,6 +403,7 @@ def compute_context(session: Session, cpv: list[str] | None) -> dict:
         "expected_baja": price["avg_baja"],
         "avg_awarded": price["avg_awarded"],
         "concentration": _hhi(rows),
+        "incumbent": _incumbent(session, buyer),
     }
 
 
@@ -389,4 +413,4 @@ def tender_market_context(tender_id: str, session: Session = Depends(get_session
     tender = session.get(Tender, tender_id)
     if tender is None:
         raise HTTPException(404, "Licitación no encontrada")
-    return compute_context(session, tender.cpv)
+    return compute_context(session, tender.cpv, buyer=tender.buyer)

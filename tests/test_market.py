@@ -114,6 +114,24 @@ def test_tender_market_context_404(client):
     assert client.get("/api/market/tender/nope/context").status_code == 404
 
 
+def test_incumbent_in_tender_context(client):
+    t = make_tender(client, cpv=["72300000"], buyer="Ayuntamiento de Bilbao")
+    client.post(
+        "/api/market/awards",
+        json=[
+            _award(source_id="I-1", buyer="Ayuntamiento de Bilbao", awarded_supplier="Vieja SL",
+                   awarded_amount=50000, award_date="2024-01-01"),
+            _award(source_id="I-2", buyer="Ayuntamiento de Bilbao", awarded_supplier="Reciente SL",
+                   awarded_amount=70000, award_date="2026-05-01"),
+        ],
+    )
+    ctx = client.get(f"/api/market/tender/{t['id']}/context").json()
+    inc = ctx["incumbent"]
+    assert inc is not None
+    assert inc["supplier"] == "Reciente SL"  # el más reciente del órgano
+    assert inc["buyer_awards"] == 2
+
+
 def test_competitor_profile(client):
     client.post(
         "/api/market/awards",
