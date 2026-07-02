@@ -143,6 +143,8 @@ def _competitors(rows: list[Award], limit: int) -> list[dict]:
     agg: dict[str, dict] = defaultdict(
         lambda: {"wins": 0, "total_awarded": 0.0, "bajas": [], "name": None}
     )
+    # Total del mercado (adjudicaciones con adjudicatario) para la CUOTA por importe.
+    market_total = sum(r.awarded_amount or 0.0 for r in rows if r.awarded_supplier)
     for r in rows:
         if not r.awarded_supplier:
             continue
@@ -160,6 +162,8 @@ def _competitors(rows: list[Award], limit: int) -> list[dict]:
             "wins": v["wins"],
             "total_awarded": round(v["total_awarded"], 2),
             "avg_baja": _avg(v["bajas"]),
+            # Cuota de mercado estimada por importe adjudicado (dentro del filtro CPV/órgano).
+            "share": round(v["total_awarded"] / market_total, 4) if market_total else None,
         }
         for v in agg.values()
     ]

@@ -48,6 +48,21 @@ def test_competitors_and_baja(client):
     assert top["avg_baja"] == 0.15
 
 
+def test_competitor_market_share(client):
+    client.post(
+        "/api/market/awards",
+        json=[
+            _award(source_id="S-1", awarded_supplier="Alfa", awarded_amount=300000),
+            _award(source_id="S-2", awarded_supplier="Beta", awarded_amount=100000),
+        ],
+    )
+    r = client.get("/api/market/competitors", params={"cpv_division": "72"})
+    comp = r.json()["competitors"]
+    alfa = next(c for c in comp if c["supplier"] == "Alfa")
+    # Cuota Alfa = 300000 / 400000 = 0.75
+    assert alfa["share"] == 0.75
+
+
 def test_pricing_avg_baja(client):
     client.post(
         "/api/market/awards",
