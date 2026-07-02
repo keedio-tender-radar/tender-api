@@ -164,13 +164,21 @@ def _competitors(rows: list[Award], limit: int) -> list[dict]:
 
 
 def _pricing(rows: list[Award]) -> dict:
-    bajas = [b for r in rows if (b := _baja(r.budget_amount, r.awarded_amount)) is not None]
-    budgets = [r.budget_amount for r in rows if r.budget_amount]
-    awarded = [r.awarded_amount for r in rows if r.awarded_amount]
+    # Presupuesto y adjudicado MEDIOS sobre el MISMO conjunto emparejado (adjudicaciones con ambos
+    # valores) → comparables y coherentes con la baja (evita "adjudicado medio > presupuesto medio"
+    # al mezclar poblaciones distintas).
+    pairs = [
+        (r.budget_amount, r.awarded_amount)
+        for r in rows
+        if r.budget_amount and r.budget_amount > 0 and r.awarded_amount is not None
+    ]
+    bajas = [_baja(b, a) for b, a in pairs]
+    budgets = [b for b, _ in pairs]
+    awarded = [a for _, a in pairs]
     return {
         "count": len(rows),
-        "with_baja": len(bajas),
-        "avg_baja": _avg(bajas),
+        "with_baja": len(pairs),
+        "avg_baja": _avg([x for x in bajas if x is not None]),
         "avg_budget": round(sum(budgets) / len(budgets), 2) if budgets else None,
         "avg_awarded": round(sum(awarded) / len(awarded), 2) if awarded else None,
     }
