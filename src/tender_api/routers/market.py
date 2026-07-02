@@ -302,6 +302,52 @@ def overview(session: Session = Depends(get_session)) -> dict:
     }
 
 
+@router.get("/competitor")
+def competitor_profile(
+    name: str = Query(..., description="Razón social del adjudicatario"),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Perfil de un adjudicatario: qué gana, de qué órganos, en qué CPV, a qué baja y su cuota."""
+    key = _norm_supplier(name)
+    all_rows = list(session.scalars(select(Award)).all())
+    mine = [
+        r for r in all_rows if r.awarded_supplier and _norm_supplier(r.awarded_supplier) == key
+    ]
+    if not mine:
+        raise HTTPException(404, "Sin adjudicaciones para ese adjudicatario")
+
+    market_total = sum(r.awarded_amount or 0.0 for r in all_rows if r.awarded_supplier)
+    total_awarded = sum(r.awarded_amount or 0.0 for r in mine)
+    bajas = [b for r in mine if (b := _baja(r.budget_amount, r.awarded_amount)) is not None]
+    contracts = sorted(
+        (
+            {
+                "title": r.title,
+                "buyer": r.buyer,
+                "cpv_division": r.cpv_division,
+                "budget_amount": r.budget_amount,
+                "awarded_amount": r.awarded_amount,
+                "baja": _baja(r.budget_amount, r.awarded_amount),
+                "award_date": r.award_date.isoformat() if r.award_date else None,
+                "url": r.url,
+            }
+            for r in mine
+        ),
+        key=lambda c: c["award_date"] or "",
+        reverse=True,
+    )
+    return {
+        "supplier": mine[0].awarded_supplier,  # nombre representativo (primer visto)
+        "wins": len(mine),
+        "total_awarded": round(total_awarded, 2),
+        "avg_baja": _avg(bajas),
+        "share": round(total_awarded / market_total, 4) if market_total else None,
+        "by_buyer": _group_totals(mine, "buyer")[:10],
+        "by_cpv": _group_totals(mine, "cpv_division")[:10],
+        "contracts": contracts[:50],
+    }
+
+
 def compute_context(session: Session, cpv: list[str] | None) -> dict:
     """Contexto competitivo de una categoría CPV (reutilizado por la ruta y por los borradores)."""
     division = _cpv_division(cpv)

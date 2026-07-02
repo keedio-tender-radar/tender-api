@@ -114,6 +114,27 @@ def test_tender_market_context_404(client):
     assert client.get("/api/market/tender/nope/context").status_code == 404
 
 
+def test_competitor_profile(client):
+    client.post(
+        "/api/market/awards",
+        json=[
+            _award(source_id="P-1", awarded_supplier="INETUM, SL", buyer="Órgano A",
+                   cpv=["72000000"], budget_amount=100000, awarded_amount=60000),
+            _award(source_id="P-2", awarded_supplier="INETUM, S.L.", buyer="Órgano B",
+                   cpv=["48000000"], budget_amount=200000, awarded_amount=250000),
+        ],
+    )
+    prof = client.get("/api/market/competitor", params={"name": "INETUM S.L."}).json()
+    assert prof["wins"] == 2  # fusiona variantes SL/S.L.
+    assert len(prof["contracts"]) == 2
+    assert {b["buyer"] for b in prof["by_buyer"]} == {"Órgano A", "Órgano B"}
+    assert prof["avg_baja"] == 0.40  # solo P-1 tiene baja (0.40); P-2 adj>presup → excluida
+
+
+def test_competitor_profile_404(client):
+    assert client.get("/api/market/competitor", params={"name": "NoExiste"}).status_code == 404
+
+
 def test_awards_csv_export(client):
     client.post(
         "/api/market/awards",
