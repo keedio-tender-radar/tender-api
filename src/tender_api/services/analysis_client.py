@@ -57,3 +57,16 @@ def answer(question: str, chunks: list[dict]) -> dict:
         resp = client.post("/answer", json={"question": question, "chunks": chunks})
         resp.raise_for_status()
         return resp.json()
+
+
+def embed(texts: list[str]) -> list[list[float]] | None:
+    """Embeddings de los textos (RAG semántico). None si desactivado/falla (→ fallback BM25)."""
+    if not texts:
+        return None
+    try:
+        with _client() as client:
+            resp = client.post("/embed", json={"texts": texts})
+            resp.raise_for_status()
+            return resp.json().get("embeddings")
+    except httpx.HTTPError:
+        return None

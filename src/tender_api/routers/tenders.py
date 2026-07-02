@@ -752,6 +752,27 @@ def _rank_chunks(question: str, chunks: list[dict], top_k: int) -> list[dict]:
     return [c for _, c in scored[:top_k]]
 
 
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def _semantic_rank(question: str, chunks: list[dict], top_k: int) -> list[dict] | None:
+    """Recuperación semántica por embeddings (coseno). None si no hay embeddings o falla → BM25."""
+    embedded = [c for c in chunks if c.get("embedding")]
+    if not embedded:
+        return None
+    q = analysis_client.embed([question])
+    if not q or not q[0]:
+        return None
+    qv = q[0]
+    scored = [(_cosine(qv, c["embedding"]), c) for c in embedded]
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [c for _, c in scored[:top_k]]
+
+
 def _get_or_build_chunks(session: Session, tender: Tender) -> list[dict]:
     """Fragmentos del pliego para el chat (RAG por expediente, ADR-004).
 
@@ -762,7 +783,11 @@ def _get_or_build_chunks(session: Session, tender: Tender) -> list[dict]:
         select(TenderChunk).where(TenderChunk.tender_id == tender.id).order_by(TenderChunk.ordinal)
     ).all()
     if rows:
-        return [{"ordinal": r.ordinal, "section": r.section, "content": r.content} for r in rows]
+        return [
+            {"ordinal": r.ordinal, "section": r.section, "content": r.content,
+             "embedding": r.embedding}
+            for r in rows
+        ]
 
     if not (doc_client.is_configured() and tender.url):
         return []
@@ -771,22 +796,31 @@ def _get_or_build_chunks(session: Session, tender: Tender) -> list[dict]:
     except httpx.HTTPError:
         return []
 
-    chunks: list[dict] = []
+    new_rows: list[TenderChunk] = []
     for i, c in enumerate(extracted):
         content = (c.get("content") or "").strip()
         if not content:
             continue
-        ordinal = c.get("ordinal", i)
-        section = c.get("section")
-        session.add(
-            TenderChunk(
-                tender_id=tender.id, ordinal=ordinal, section=section, content=content
-            )
+        row = TenderChunk(
+            tender_id=tender.id, ordinal=c.get("ordinal", i), section=c.get("section"),
+            content=content,
         )
-        chunks.append({"ordinal": ordinal, "section": section, "content": content})
-    if chunks:
+        session.add(row)
+        new_rows.append(row)
+
+    # Embeddings (RAG semántico) de una vez; None si desactivado/falla → se usará BM25.
+    if new_rows and analysis_client.is_configured():
+        vectors = analysis_client.embed([r.content for r in new_rows])
+        if vectors and len(vectors) == len(new_rows):
+            for row, vec in zip(new_rows, vectors, strict=False):
+                row.embedding = vec
+
+    if new_rows:
         session.commit()
-    return chunks
+    return [
+        {"ordinal": r.ordinal, "section": r.section, "content": r.content, "embedding": r.embedding}
+        for r in new_rows
+    ]
 
 
 @router.post("/{tender_id}/ask")
@@ -822,8 +856,10 @@ def ask(tender_id: str, payload: AskRequest, session: Session = Depends(get_sess
             raise HTTPException(422, "La licitación no tiene URL de documento.")
         raise HTTPException(502, "No se pudo extraer el pliego.")
 
-    # Recuperación léxica filtrada por expediente + numeración de fuentes para las citas [n].
-    top = _rank_chunks(payload.question, chunks, payload.top_k)
+    # Recuperación filtrada por expediente: semántica (embeddings) si está activa; si no, BM25.
+    top = _semantic_rank(payload.question, chunks, payload.top_k) or _rank_chunks(
+        payload.question, chunks, payload.top_k
+    )
     sources = [
         {"n": i + 1, "section": c.get("section"), "content": (c.get("content") or "")[:600]}
         for i, c in enumerate(top)

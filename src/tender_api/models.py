@@ -179,6 +179,8 @@ class TenderChunk(Base):
     ordinal: Mapped[int] = mapped_column(Integer, default=0)
     section: Mapped[str | None] = mapped_column(String, nullable=True)
     content: Mapped[str] = mapped_column(String)
+    # Embedding del fragmento (lista de floats) para RAG semántico; None → recuperación BM25.
+    embedding: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     tender: Mapped[Tender] = relationship(back_populates="chunks")

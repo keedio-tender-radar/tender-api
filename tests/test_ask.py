@@ -29,6 +29,26 @@ def test_rank_chunks_bm25_prefers_rare_term():
     assert "solvencia" in top[0]["content"]
 
 
+def test_semantic_rank_by_embedding(monkeypatch):
+    from tender_api.routers import tenders
+    from tender_api.services import analysis_client
+
+    # Pregunta ~ vector [1,0]; el chunk con embedding más alineado gana pese al léxico.
+    monkeypatch.setattr(analysis_client, "embed", lambda texts: [[1.0, 0.0]])
+    chunks = [
+        {"content": "irrelevante", "embedding": [0.0, 1.0]},
+        {"content": "relevante", "embedding": [0.9, 0.1]},
+    ]
+    top = tenders._semantic_rank("pregunta", chunks, 1)
+    assert top[0]["content"] == "relevante"
+
+
+def test_semantic_rank_none_without_embeddings(monkeypatch):
+    from tender_api.routers import tenders
+
+    assert tenders._semantic_rank("q", [{"content": "x"}], 1) is None
+
+
 def test_ask_extractive_fallback(client, monkeypatch):
     # Sin visual-rag → QA extractivo sobre los chunks del doc-service.
     monkeypatch.setattr(settings, "visual_rag_url", "")
@@ -102,9 +122,11 @@ def test_ask_rag_synthesis_with_citations(client, monkeypatch):
     captured: dict = {}
 
     def ai_handler(req: httpx.Request) -> httpx.Response:
-        assert req.url.path == "/answer"
         import json
 
+        if req.url.path == "/embed":  # embeddings desactivados en el test → BM25
+            return httpx.Response(200, json={"embeddings": None})
+        assert req.url.path == "/answer"
         captured["chunks"] = json.loads(req.content)["chunks"]
         return httpx.Response(
             200,
