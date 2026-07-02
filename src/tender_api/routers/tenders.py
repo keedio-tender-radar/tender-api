@@ -8,7 +8,17 @@ import re
 from datetime import UTC, datetime, timedelta
 
 import httpx
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    UploadFile,
+)
 from fastapi.responses import Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -16,9 +26,10 @@ from tender_contracts import Tender as TenderContract
 from tender_contracts import TenderScore as ScoreContract
 
 from tender_api.config import settings
-from tender_api.database import get_session
+from tender_api.database import SessionLocal, get_session
 from tender_api.models import (
     DailySnapshot,
+    DraftGenJob,
     GeneratedDocument,
     RunLog,
     Tender,
@@ -1123,20 +1134,66 @@ def _generate_and_store_drafts(session: Session, tender: Tender) -> list[Generat
     return rows
 
 
-@router.post("/{tender_id}/generate-offer-drafts")
-def generate_offer_drafts(tender_id: str, session: Session = Depends(get_session)) -> dict:
-    """Genera y persiste los borradores de oferta (Go/No-Go, memoria, matriz, checklist)."""
-    tender = _get_or_404(session, tender_id)
+def _set_draft_status(
+    session: Session,
+    tender_id: str,
+    status: str,
+    detail: str | None = None,
+    count: int | None = None,
+) -> None:
+    """Upsert del estado de generación de borradores (una fila por licitación)."""
+    job = session.get(DraftGenJob, tender_id)
+    if job is None:
+        job = DraftGenJob(tender_id=tender_id)
+        session.add(job)
+    job.status = status
+    job.detail = detail
+    job.count = count
+    session.commit()
+
+
+def _run_draft_generation(tender_id: str) -> None:
+    """Tarea en segundo plano: genera los borradores con su propia sesión y registra el estado."""
+    with SessionLocal() as session:
+        tender = session.get(Tender, tender_id)
+        if tender is None:
+            return
+        try:
+            rows = _generate_and_store_drafts(session, tender)
+            _set_draft_status(session, tender_id, "ok", count=len(rows))
+        except Exception as exc:  # noqa: BLE001 — cualquier fallo queda registrado para el sondeo
+            session.rollback()
+            _set_draft_status(session, tender_id, "error", detail=f"{type(exc).__name__}: {exc}")
+
+
+@router.post("/{tender_id}/generate-offer-drafts", status_code=202)
+def generate_offer_drafts(
+    tender_id: str, background: BackgroundTasks, session: Session = Depends(get_session)
+) -> dict:
+    """Lanza la generación de borradores en segundo plano (asíncrona) y devuelve 202.
+
+    La generación (extracción del pliego + LLM) es lenta; el dashboard sondea
+    `GET /{id}/offer-drafts-status` hasta que pase a `ok`/`error` y entonces lee los borradores.
+    """
+    _get_or_404(session, tender_id)
     if not analysis_client.is_configured():
         raise HTTPException(503, "analysis-service no configurado.")
-    try:
-        rows = _generate_and_store_drafts(session, tender)
-    except httpx.HTTPError as exc:
-        raise HTTPException(502, f"Generación de borradores fallida: {exc}") from exc
+    _set_draft_status(session, tender_id, "running")
+    background.add_task(_run_draft_generation, tender_id)
+    return {"tender_id": tender_id, "status": "running"}
+
+
+@router.get("/{tender_id}/offer-drafts-status")
+def offer_drafts_status(tender_id: str, session: Session = Depends(get_session)) -> dict:
+    """Estado de la generación asíncrona de borradores: running | ok | error | idle."""
+    job = session.get(DraftGenJob, tender_id)
+    if job is None:
+        return {"status": "idle"}
     return {
-        "tender_id": tender_id,
-        "generated": [{"kind": r.kind, "title": r.title} for r in rows],
-        "count": len(rows),
+        "status": job.status,
+        "detail": job.detail,
+        "count": job.count,
+        "at": job.updated_at.isoformat() if job.updated_at else None,
     }
 
 

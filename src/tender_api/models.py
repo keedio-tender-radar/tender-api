@@ -24,6 +24,7 @@ __all__ = [
     "TenderChunk",
     "GeneratedDocument",
     "Award",
+    "DraftGenJob",
 ]
 
 
@@ -266,6 +267,24 @@ class Award(Base):
     award_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     url: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class DraftGenJob(Base):
+    """Estado de la generación asíncrona de borradores de oferta (una fila por licitación).
+
+    La generación (extracción del pliego + LLM) es lenta; se lanza en segundo plano y el
+    dashboard sondea este estado (running → ok/error) en vez de bloquear el navegador.
+    """
+
+    __tablename__ = "draft_gen_jobs"
+
+    tender_id: Mapped[str] = mapped_column(String, primary_key=True)
+    status: Mapped[str] = mapped_column(String)  # running | ok | error
+    detail: Mapped[str | None] = mapped_column(String, nullable=True)
+    count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
 
 
 class RunLog(Base):

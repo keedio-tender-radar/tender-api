@@ -23,8 +23,14 @@ def client_fixture():
             yield session
 
     app.dependency_overrides[get_session] = override
+    # Las tareas en segundo plano (p. ej. generación de borradores) abren su propia sesión con
+    # SessionLocal; apuntarla al motor de test para que escriban en la misma BD en memoria.
+    import tender_api.routers.tenders as _tenders
+    _old_session_local = _tenders.SessionLocal
+    _tenders.SessionLocal = TestingSession
     with TestClient(app) as client:
         yield client
+    _tenders.SessionLocal = _old_session_local
     app.dependency_overrides.clear()
 
 

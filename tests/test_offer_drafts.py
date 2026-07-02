@@ -32,9 +32,15 @@ def test_generate_and_list_offer_drafts(client, monkeypatch):
     )
 
     t = make_tender(client)
+    # Asíncrono: 202 + running; la tarea en segundo plano corre tras la respuesta (TestClient).
     resp = client.post(f"/api/tenders/{t['id']}/generate-offer-drafts")
-    assert resp.status_code == 200
-    assert resp.json()["count"] == 2
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "running"
+
+    # El estado pasa a ok con la cuenta de borradores.
+    status = client.get(f"/api/tenders/{t['id']}/offer-drafts-status").json()
+    assert status["status"] == "ok"
+    assert status["count"] == 2
 
     docs = client.get(f"/api/tenders/{t['id']}/generated-documents").json()
     kinds = {d["kind"] for d in docs}
