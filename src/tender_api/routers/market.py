@@ -7,10 +7,13 @@ CPV estratégicos. Es analítica sobre datos públicos; no influye en el scoring
 
 from __future__ import annotations
 
+import csv
+import io
 import re
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -246,6 +249,39 @@ def cpv_volume(
     """CPV estratégicos por volumen: adjudicaciones e importe total por división."""
     rows = list(session.scalars(select(Award)).all())
     return {"divisions": _group_totals(rows, "cpv_division")[:limit]}
+
+
+@router.get("/awards.csv")
+def awards_csv(
+    session: Session = Depends(get_session),
+    cpv_division: str | None = Query(default=None),
+) -> Response:
+    """Exporta las adjudicaciones (con baja calculada) a CSV para informes/Excel."""
+    rows = _filtered_awards(session, cpv_division, None)
+    rows.sort(key=lambda r: r.award_date.isoformat() if r.award_date else "", reverse=True)
+    buf = io.StringIO()
+    writer = csv.writer(buf, delimiter=";")
+    writer.writerow(
+        ["source_id", "buyer", "cpv_division", "awarded_supplier", "budget_amount",
+         "awarded_amount", "baja_%", "award_date", "title", "url"]
+    )
+    for r in rows:
+        b = _baja(r.budget_amount, r.awarded_amount)
+        writer.writerow(
+            [
+                r.source_id, r.buyer or "", r.cpv_division or "", r.awarded_supplier or "",
+                "" if r.budget_amount is None else r.budget_amount,
+                "" if r.awarded_amount is None else r.awarded_amount,
+                "" if b is None else round(b * 100, 1),
+                r.award_date.isoformat() if r.award_date else "",
+                r.title or "", r.url or "",
+            ]
+        )
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="adjudicaciones.csv"'},
+    )
 
 
 @router.get("/overview")

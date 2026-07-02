@@ -114,6 +114,21 @@ def test_tender_market_context_404(client):
     assert client.get("/api/market/tender/nope/context").status_code == 404
 
 
+def test_awards_csv_export(client):
+    client.post(
+        "/api/market/awards",
+        json=[_award(source_id="C-1", awarded_supplier="Alfa", budget_amount=100000,
+                     awarded_amount=60000)],
+    )
+    resp = client.get("/api/market/awards.csv")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    body = resp.text
+    assert "awarded_supplier" in body  # cabecera
+    assert "Alfa" in body
+    assert "40.0" in body  # baja % = (100000-60000)/100000
+
+
 def test_baja_excludes_awarded_over_budget_consistently(client):
     # adjudicado > presupuesto (mismatch de escala) NO cuenta como baja en pricing NI en overview.
     client.post(
