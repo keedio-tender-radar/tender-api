@@ -48,11 +48,15 @@ def _cpv_division(cpv: list[str] | None) -> str | None:
 
 
 def _baja(budget: float | None, awarded: float | None) -> float | None:
-    """Baja económica = (presupuesto - adjudicado) / presupuesto, en [0, 1]. None si no aplica."""
-    if not budget or budget <= 0 or awarded is None or awarded < 0:
+    """Baja económica = (presupuesto - adjudicado) / presupuesto. None si no es una baja válida.
+
+    Fuente única de verdad usada por overview/pricing/competidores/contexto. Devuelve None si falta
+    algún importe o si `adjudicado > presupuesto` (mismatch de escala en marcos o sobrecoste) — así
+    esos casos se EXCLUYEN de forma consistente en todos los agregados (no cuentan como baja 0%).
+    """
+    if not budget or budget <= 0 or awarded is None or awarded < 0 or awarded > budget:
         return None
-    b = (budget - awarded) / budget
-    return round(max(0.0, min(1.0, b)), 4)
+    return round((budget - awarded) / budget, 4)
 
 
 def _parse_date(value: str | None):
@@ -164,22 +168,19 @@ def _competitors(rows: list[Award], limit: int) -> list[dict]:
 
 
 def _pricing(rows: list[Award]) -> dict:
-    # Presupuesto y adjudicado MEDIOS sobre el MISMO conjunto emparejado (adjudicaciones con ambos
-    # valores) → comparables y coherentes con la baja (evita "adjudicado medio > presupuesto medio"
-    # al mezclar poblaciones distintas).
+    # Medios sobre el conjunto con baja VÁLIDA (misma definición que _baja) → comparables y
+    # coherentes con la baja media (adjudicado medio <= presupuesto medio).
     pairs = [
-        (r.budget_amount, r.awarded_amount)
+        (r.budget_amount, r.awarded_amount, b)
         for r in rows
-        if r.budget_amount and r.budget_amount > 0 and r.awarded_amount is not None
-        and r.awarded_amount <= r.budget_amount  # baja real (excluye mismatch de escala/sobrecoste)
+        if (b := _baja(r.budget_amount, r.awarded_amount)) is not None
     ]
-    bajas = [_baja(b, a) for b, a in pairs]
-    budgets = [b for b, _ in pairs]
-    awarded = [a for _, a in pairs]
+    budgets = [p[0] for p in pairs]
+    awarded = [p[1] for p in pairs]
     return {
         "count": len(rows),
         "with_baja": len(pairs),
-        "avg_baja": _avg([x for x in bajas if x is not None]),
+        "avg_baja": _avg([p[2] for p in pairs]),
         "avg_budget": round(sum(budgets) / len(budgets), 2) if budgets else None,
         "avg_awarded": round(sum(awarded) / len(awarded), 2) if awarded else None,
     }

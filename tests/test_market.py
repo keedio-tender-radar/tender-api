@@ -99,6 +99,23 @@ def test_tender_market_context_404(client):
     assert client.get("/api/market/tender/nope/context").status_code == 404
 
 
+def test_baja_excludes_awarded_over_budget_consistently(client):
+    # adjudicado > presupuesto (mismatch de escala) NO cuenta como baja en pricing NI en overview.
+    client.post(
+        "/api/market/awards",
+        json=[
+            _award(source_id="OK-1", budget_amount=100000, awarded_amount=60000),  # baja 0.40
+            _award(source_id="BAD", budget_amount=100000, awarded_amount=410000),  # adj>presup
+        ],
+    )
+    pricing = client.get("/api/market/pricing", params={"cpv_division": "72"}).json()
+    assert pricing["with_baja"] == 1  # solo OK-1
+    assert pricing["avg_baja"] == 0.40
+    assert pricing["avg_awarded"] <= pricing["avg_budget"]  # coherente
+    ov = client.get("/api/market/overview").json()
+    assert ov["avg_baja"] == 0.40  # overview usa la MISMA definición
+
+
 def test_competitor_name_normalization_merges_variants(client):
     # "SEIDOR CONSULTING, SL" y "…, S.L." son la misma empresa → deben fusionarse en un competidor.
     client.post(
