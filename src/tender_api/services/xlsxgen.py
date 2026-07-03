@@ -140,17 +140,29 @@ def _sheet_requerimientos(wb, ws, tender, team, st, reqs=None) -> None:
     ws.freeze_panes = "A4"
 
 
+# Fases del proyecto (marco), como fracción [inicio, fin] sobre la duración total.
+_GANTT_PHASES: list[tuple[str, str, float, float]] = [
+    ("Análisis y arranque", "Requisitos, plan de proyecto y arranque", 0.00, 0.12),
+    ("Diseño y arquitectura", "Diseño técnico y de la solución", 0.08, 0.30),
+    ("Desarrollo / implantación", "Construcción e integración de componentes", 0.25, 0.70),
+    ("Pruebas y QA", "Pruebas unitarias, integración y aceptación", 0.60, 0.85),
+    ("Despliegue y formación", "Puesta en producción y formación", 0.80, 0.95),
+    ("Soporte y cierre", "Soporte, garantía y cierre del proyecto", 0.92, 1.00),
+]
+
+
 def _sheet_cronograma(wb, tender, months, st) -> None:
+    from openpyxl.styles import PatternFill
     from openpyxl.utils import get_column_letter
 
     ws = wb.create_sheet("Cronograma")
     weeks = min(months * 4, 24)
     start = datetime.now(UTC).date()
-    ws["A1"] = "Cronograma (Gantt) — semanas"
+    ws["A1"] = f"Cronograma (Gantt) — {weeks} semanas ({months} meses)"
     ws["A1"].font = st["bold"]
 
     hr = 3
-    base = ["Paquete", "Reqs.", "Descripción"]
+    base = ["Fase", "Descripción"]
     for c, h in enumerate(base, start=1):
         cell = ws.cell(hr, c, h)
         cell.font, cell.fill, cell.alignment, cell.border = (
@@ -163,21 +175,30 @@ def _sheet_cronograma(wb, tender, months, st) -> None:
         cell.font, cell.fill, cell.alignment, cell.border = (
             st["hdr_font"], st["hdr_fill"], st["center"], st["border"]
         )
-        ws.column_dimensions[get_column_letter(c)].width = 7
+        ws.column_dimensions[get_column_letter(c)].width = 5
 
-    for i in range(8):  # filas-paquete (plantilla)
-        r = hr + 1 + i
-        ws.cell(r, 1, f"PT{i + 1}" if i < 4 else "")
-        for c in range(1, len(base) + 1 + weeks + 1):
-            ws.cell(r, c).border = st["border"]
+    # Fases pre-cumplimentadas con su barra Gantt (proporcional a la duración; editable).
+    bar = PatternFill("solid", fgColor=BRAND_HEX)
+    for idx, (name, desc, sf, ef) in enumerate(_GANTT_PHASES):
+        r = hr + 1 + idx
+        ws.cell(r, 1, name).font = st["bold"]
+        ws.cell(r, 2, desc).alignment = st["wrap"]
+        w0 = max(1, round(sf * weeks) + 1)
+        w1 = min(weeks, max(w0, round(ef * weeks)))
+        for w in range(weeks):
+            cell = ws.cell(r, len(base) + 1 + w)
+            cell.border = st["border"]
+            if w0 <= w + 1 <= w1:
+                cell.fill = bar
+        ws.cell(r, 1).border = st["border"]
+        ws.cell(r, 2).border = st["border"]
 
-    leg = hr + 1 + 9
-    ws.cell(leg, 1, "Leyenda:").font = st["bold"]
-    ws.cell(leg, 2, "x=inicio · f=Front · b=Back · d=Data · s=Sys · t=Test")
-    ws.column_dimensions["A"].width = 10
-    ws.column_dimensions["B"].width = 12
-    ws.column_dimensions["C"].width = 34
-    ws.freeze_panes = "D4"
+    leg = hr + 1 + len(_GANTT_PHASES) + 1
+    ws.cell(leg, 1, "Barra = semanas de cada fase (marco orientativo; ajusta al plan).")
+    ws.cell(leg, 1).font = st["bold"]
+    ws.column_dimensions["A"].width = 24
+    ws.column_dimensions["B"].width = 40
+    ws.freeze_panes = "C4"
 
 
 def _sheet_costes(wb, rate, margin, st) -> None:

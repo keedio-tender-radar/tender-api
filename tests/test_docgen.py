@@ -62,3 +62,15 @@ def test_plan_xlsx_download(client):
     import openpyxl
     wb = openpyxl.load_workbook(io.BytesIO(r.content))
     assert wb.sheetnames == ["Portada", "Requerimientos", "Cronograma", "Resumen de costes"]
+    # El cronograma sale cumplimentado con las fases del proyecto (no vacío).
+    crono = wb["Cronograma"]
+    fases = [crono.cell(row=r_, column=1).value for r_ in range(4, 10)]
+    assert "Análisis y arranque" in fases
+    assert "Soporte y cierre" in fases
+    # La barra Gantt está marcada (alguna celda de semana con relleno de color).
+    filled = any(
+        crono.cell(row=4, column=c).fill and crono.cell(row=4, column=c).fill.fgColor.rgb
+        not in (None, "00000000")
+        for c in range(3, 10)
+    )
+    assert filled
