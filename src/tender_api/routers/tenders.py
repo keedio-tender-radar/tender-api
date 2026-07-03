@@ -1155,6 +1155,15 @@ _WORKSPACE_FOLDERS = [
     "05_economico",
     "99_presentacion",
 ]
+_ALLOWED_UPLOAD_EXT = {
+    ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt",
+    ".png", ".jpg", ".jpeg", ".md", ".txt", ".csv", ".zip",
+}
+_MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
+
+
+def _safe_filename(name: str) -> str:
+    return (name or "fichero").rsplit("/", 1)[-1].rsplit("\\", 1)[-1].strip() or "fichero"
 _REQUIRED_DOCS = [
     "Informe Go/No-Go",
     "Resumen ejecutivo",
@@ -1310,11 +1319,58 @@ _PENDING_HUMAN = [
 ]
 
 
+def _store_expedient_file(
+    session: Session, tender_id: str, folder: str, name: str, data: bytes, content_type: str
+) -> None:
+    """Sube a InsForge Storage y upserta el registro TenderDocument (idempotente por key)."""
+    key = f"{tender_id}/{folder}/{name}"
+    storage.put_bytes(key, data, content_type)
+    for old in session.scalars(
+        select(TenderDocument).where(
+            TenderDocument.tender_id == tender_id, TenderDocument.storage_key == key
+        )
+    ).all():
+        session.delete(old)
+    session.add(
+        TenderDocument(
+            tender_id=tender_id, folder=folder, filename=name, storage_key=key,
+            content_type=content_type, size=len(data),
+        )
+    )
+
+
+def _autofill_expedient(session: Session, tender: Tender, rows: list) -> None:
+    """Sube automáticamente los borradores (.md) y el paquete Word al expediente (no bloqueante)."""
+    if not storage.is_configured():
+        return
+    try:
+        for r in rows:
+            folder = _DRAFT_FOLDER.get(r.kind, "02_borradores_oferta")
+            _store_expedient_file(
+                session, tender.id, folder, f"{r.kind}.md",
+                (r.content or "").encode("utf-8"), "text/markdown",
+            )
+        from tender_api.routers.profile import _get_or_create
+
+        p = _get_or_create(session)
+        docx = docgen.build_docx(
+            tender, _drafts_for(session, tender.id), _latest_score(session, tender.id),
+            team=list(p.team or []), months=p.project_months, rate=p.hourly_rate, margin=p.margin,
+        )
+        _store_expedient_file(
+            session, tender.id, "99_presentacion", f"{_slug(tender.title)}-oferta.docx", docx,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        session.commit()
+    except Exception:  # noqa: BLE001
+        session.rollback()  # el auto-relleno nunca debe romper la preparación del paquete
+
+
 @router.post("/{tender_id}/prepare-submission-package")
 def prepare_submission_package(tender_id: str, session: Session = Depends(get_session)) -> dict:
     """Empaqueta los borradores en las carpetas del expediente y devuelve el manifiesto.
 
-    Genera los borradores si aún no existen. El almacenamiento de binarios es futuro (MinIO/S3).
+    Genera los borradores si aún no existen y (si hay almacenamiento) sube los .md y el Word.
     """
     tender = _get_or_404(session, tender_id)
     if not analysis_client.is_configured():
@@ -1335,6 +1391,7 @@ def prepare_submission_package(tender_id: str, session: Session = Depends(get_se
 
     tender.status = "interested"
     session.commit()
+    _autofill_expedient(session, tender, rows)  # sube .md + Word si hay almacenamiento
     manifest_lines = [f"# Expediente {tender.source_id} — {tender.title}", ""]
     for folder in _WORKSPACE_FOLDERS:
         manifest_lines.append(f"## {folder}")
@@ -1477,20 +1534,37 @@ async def upload_document(
     folder: str = Form(default="00_originales"),
     session: Session = Depends(get_session),
 ) -> dict:
-    """Sube un binario original (PCAP/PPT/anexo) al expediente en S3/MinIO."""
+    """Sube un fichero al expediente (InsForge Storage) en la carpeta indicada."""
     tender = _get_or_404(session, tender_id)
     if not storage.is_configured():
-        raise HTTPException(503, "Almacenamiento S3/MinIO no configurado (modo solo-lógico).")
+        raise HTTPException(503, "Almacenamiento no configurado (modo solo-lógico).")
+    if folder not in _WORKSPACE_FOLDERS:
+        raise HTTPException(400, "Carpeta no válida.")
+    name = _safe_filename(file.filename or "")
+    ext = f".{name.rsplit('.', 1)[-1].lower()}" if "." in name else ""
+    if ext not in _ALLOWED_UPLOAD_EXT:
+        raise HTTPException(
+            400, f"Tipo de fichero no permitido ({ext or 'sin extensión'})."
+        )
     data = await file.read()
-    key = f"{tender.id}/{folder}/{file.filename}"
+    if len(data) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "Fichero demasiado grande (máx. 25 MB).")
+    key = f"{tender.id}/{folder}/{name}"
     try:
         storage.put_bytes(key, data, file.content_type or "application/octet-stream")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"Subida fallida: {exc}") from exc
+    # Reemplaza el registro previo con el mismo key (re-subida del mismo nombre).
+    for old in session.scalars(
+        select(TenderDocument).where(
+            TenderDocument.tender_id == tender.id, TenderDocument.storage_key == key
+        )
+    ).all():
+        session.delete(old)
     row = TenderDocument(
         tender_id=tender.id,
         folder=folder,
-        filename=file.filename or "documento",
+        filename=name,
         storage_key=key,
         content_type=file.content_type,
         size=len(data),
@@ -1502,22 +1576,69 @@ async def upload_document(
 
 
 @router.get("/{tender_id}/documents")
-def list_documents(tender_id: str, session: Session = Depends(get_session)) -> list[dict]:
-    """Lista los binarios del expediente (con URL prefirmada si el almacenamiento está activo)."""
+def list_documents(tender_id: str, session: Session = Depends(get_session)) -> dict:
+    """Lista los ficheros del expediente por carpeta (descarga vía el proxy de la API)."""
     _get_or_404(session, tender_id)
     rows = session.scalars(
-        select(TenderDocument).where(TenderDocument.tender_id == tender_id)
+        select(TenderDocument)
+        .where(TenderDocument.tender_id == tender_id)
+        .order_by(TenderDocument.folder, TenderDocument.filename)
     ).all()
-    out = []
-    for r in rows:
-        item = {"id": r.id, "filename": r.filename, "folder": r.folder, "size": r.size}
-        if storage.is_configured():
-            try:
-                item["url"] = storage.presigned_get(r.storage_key)
-            except Exception:  # noqa: BLE001
-                item["url"] = None
-        out.append(item)
-    return out
+    files = [
+        {
+            "id": r.id,
+            "filename": r.filename,
+            "folder": r.folder,
+            "size": r.size,
+            "content_type": r.content_type,
+            "download_url": f"/api/tenders/{tender_id}/documents/{r.id}/download",
+        }
+        for r in rows
+    ]
+    return {"files": files, "configured": storage.is_configured()}
+
+
+@router.get("/{tender_id}/documents/{doc_id}/download")
+def download_document(
+    tender_id: str, doc_id: str, session: Session = Depends(get_session)
+) -> Response:
+    """Descarga un fichero del expediente (proxy desde InsForge Storage; bucket privado)."""
+    _get_or_404(session, tender_id)
+    row = session.get(TenderDocument, doc_id)
+    if not row or row.tender_id != tender_id:
+        raise HTTPException(404, "Documento no encontrado.")
+    if not storage.is_configured():
+        raise HTTPException(503, "Almacenamiento no configurado.")
+    try:
+        data, ctype = storage.fetch(row.storage_key)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"Descarga fallida: {exc}") from exc
+    from urllib.parse import quote as _q
+
+    return Response(
+        content=data,
+        media_type=row.content_type or ctype,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{_q(row.filename)}"},
+    )
+
+
+@router.delete("/{tender_id}/documents/{doc_id}")
+def delete_document(
+    tender_id: str, doc_id: str, session: Session = Depends(get_session)
+) -> dict:
+    """Borra un fichero del expediente (de InsForge Storage y de la BD)."""
+    _get_or_404(session, tender_id)
+    row = session.get(TenderDocument, doc_id)
+    if not row or row.tender_id != tender_id:
+        raise HTTPException(404, "Documento no encontrado.")
+    if storage.is_configured():
+        try:
+            storage.delete(row.storage_key)
+        except Exception:  # noqa: BLE001
+            pass  # el fichero puede no existir; borramos el registro igualmente
+    session.delete(row)
+    session.commit()
+    return {"ok": True}
 
 
 @router.get("/{tender_id}/required-documents")

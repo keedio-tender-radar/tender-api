@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     insforge_anon_key: str = ""
     digest_email_to: str = ""  # destinatario(s) del informe por email (coma-separados)
 
+    # Almacenamiento de ficheros del expediente (InsForge Storage, bucket privado + key admin).
+    insforge_api_key: str = ""  # key admin (x-api-key) para la REST de storage
+    expedient_bucket: str = "tender-expedientes"
+
     # Logo de Keedio para los documentos generados (descargado y embebido; webp→png en runtime).
     keedio_logo_url: str = "https://keedio.com/images/Logo_keedio_hu_cd4a97c7d0e86e82.webp"
 

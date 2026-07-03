@@ -1,44 +1,72 @@
-"""Almacenamiento de binarios del expediente en S3/MinIO (opcional).
+"""Almacenamiento de ficheros del expediente en InsForge Storage (bucket privado).
 
-Si no hay bucket configurado, `is_configured()` es False y los endpoints degradan a 503 (modo
-solo-lógico: las carpetas existen en BD pero no se suben ficheros). boto3 funciona con AWS S3 y
-con MinIO vía `endpoint_url`. boto3 se importa de forma perezosa para no pesar si no se usa.
+Acceso server-side con la key admin (`x-api-key`). Si no está configurado, `is_configured()` es
+False y los endpoints degradan a 503 (modo solo-lógico). REST:
+- PUT    /api/storage/buckets/{bucket}/objects/{key}   → subir con key exacto
+- GET    /api/storage/buckets/{bucket}/objects?prefix= → listar
+- GET    /api/storage/buckets/{bucket}/objects/{key}   → descargar (302 → CDN)
+- DELETE /api/storage/buckets/{bucket}/objects/{key}   → borrar
 """
 
 from __future__ import annotations
+
+from urllib.parse import quote
+
+import httpx
 
 from tender_api.config import settings
 
 
 def is_configured() -> bool:
-    return bool(settings.s3_bucket and settings.s3_access_key and settings.s3_secret_key)
+    return bool(
+        settings.insforge_api_url and settings.insforge_api_key and settings.expedient_bucket
+    )
 
 
-def _client():
-    import boto3  # import perezoso
+def _objects_url() -> str:
+    base = settings.insforge_api_url.rstrip("/")
+    return f"{base}/api/storage/buckets/{settings.expedient_bucket}/objects"
 
-    kwargs = {
-        "aws_access_key_id": settings.s3_access_key,
-        "aws_secret_access_key": settings.s3_secret_key,
-        "region_name": settings.s3_region,
-    }
-    if settings.s3_endpoint_url:
-        kwargs["endpoint_url"] = settings.s3_endpoint_url  # MinIO u otro S3-compatible
-    return boto3.client("s3", **kwargs)
+
+def _obj_url(key: str) -> str:
+    return f"{_objects_url()}/{quote(key, safe='/')}"
+
+
+def _headers() -> dict:
+    return {"x-api-key": settings.insforge_api_key}
 
 
 def put_bytes(key: str, data: bytes, content_type: str = "application/octet-stream") -> str:
-    """Sube bytes a {bucket}/{key} y devuelve la clave. Requiere is_configured()."""
-    _client().put_object(
-        Bucket=settings.s3_bucket, Key=key, Body=data, ContentType=content_type
-    )
+    """Sube bytes bajo el key exacto (`{tender_id}/{carpeta}/{fichero}`) y devuelve la clave."""
+    filename = key.rsplit("/", 1)[-1] or "fichero"
+    with httpx.Client(timeout=90) as client:
+        resp = client.put(
+            _obj_url(key),
+            headers=_headers(),
+            files={"file": (filename, data, content_type or "application/octet-stream")},
+        )
+        resp.raise_for_status()
     return key
 
 
-def presigned_get(key: str, expires: int = 3600) -> str:
-    """URL prefirmada de descarga para la clave dada."""
-    return _client().generate_presigned_url(
-        "get_object",
-        Params={"Bucket": settings.s3_bucket, "Key": key},
-        ExpiresIn=expires,
-    )
+def fetch(key: str) -> tuple[bytes, str]:
+    """Descarga los bytes (sigue el redirect a la CDN). Devuelve (contenido, content_type)."""
+    with httpx.Client(timeout=90, follow_redirects=True) as client:
+        resp = client.get(_obj_url(key), headers=_headers())
+        resp.raise_for_status()
+        return resp.content, resp.headers.get("content-type", "application/octet-stream")
+
+
+def delete(key: str) -> None:
+    with httpx.Client(timeout=30) as client:
+        resp = client.delete(_obj_url(key), headers=_headers())
+        resp.raise_for_status()
+
+
+def list_objects(prefix: str) -> list[dict]:
+    with httpx.Client(timeout=30) as client:
+        resp = client.get(
+            _objects_url(), headers=_headers(), params={"prefix": prefix, "limit": 200}
+        )
+        resp.raise_for_status()
+        return resp.json().get("data", [])
