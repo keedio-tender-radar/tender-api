@@ -47,4 +47,4 @@ def test_plan_xlsx_download(client):
 
     import openpyxl
     wb = openpyxl.load_workbook(io.BytesIO(r.content))
-    assert wb.sheetnames == ["Requerimientos", "Cronograma", "Resumen de costes"]
+    assert wb.sheetnames == ["Portada", "Requerimientos", "Cronograma", "Resumen de costes"]

@@ -41,13 +41,46 @@ def build_project_plan(tender, score, team, months, rate, margin, drafts=None) -
     st = _styles()
 
     wb = Workbook()
-    _sheet_requerimientos(wb, wb.active, tender, team, st, reqs)
+    _sheet_portada(wb, wb.active, tender, score, st)
+    _sheet_requerimientos(wb, wb.create_sheet("Requerimientos"), tender, team, st, reqs)
     _sheet_cronograma(wb, tender, months, st)
     _sheet_costes(wb, rate, margin, st)
 
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def _sheet_portada(wb, ws, tender, score, st) -> None:
+    """Hoja de portada del plan: marca, título, datos clave, valoración y sello."""
+    from openpyxl.styles import Alignment, Font
+
+    ws.title = "Portada"
+    ws.sheet_view.showGridLines = False
+    ws.column_dimensions["A"].width = 3
+    ws.column_dimensions["B"].width = 92
+
+    ws["B2"] = "KEEDIO"
+    ws["B2"].font = Font(bold=True, size=28, color=BRAND_HEX)
+    ws["B4"] = "PAQUETE DE OFERTA · PLAN DE PROYECTO"
+    ws["B4"].font = Font(bold=True, size=11, color=BRAND_HEX)
+
+    ws["B6"] = tender.title or "(sin título)"
+    ws["B6"].font = Font(bold=True, size=20)
+    ws["B6"].alignment = Alignment(wrap_text=True, vertical="top")
+    ws.row_dimensions[6].height = 48
+
+    ws["B8"] = f"Expediente {tender.source_id}  ·  Fuente {tender.source}"
+    ws["B9"] = f"Presupuesto de licitación: {tender.budget_amount or 's/d'} {tender.currency}"
+    if score:
+        ws["B11"] = f"Valoración Go/No-Go: {score.total}/100 · {score.recommendation.upper()}"
+        ws["B11"].font = Font(bold=True, size=13, color=BRAND_HEX)
+    ws["B13"] = "Contenido: Requerimientos · Cronograma (Gantt) · Resumen de costes"
+    ws["B13"].font = Font(italic=True, size=10, color="6E7686")
+    ws["B15"] = (
+        f"Generado el {datetime.now(UTC).date().isoformat()} · Keedio Tender Radar · Confidencial"
+    )
+    ws["B15"].font = Font(size=9, color="999999")
 
 
 def _sheet_requerimientos(wb, ws, tender, team, st, reqs=None) -> None:
