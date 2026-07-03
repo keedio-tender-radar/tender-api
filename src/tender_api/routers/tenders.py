@@ -560,6 +560,7 @@ def extract_and_cache_pliego(tender_id: str, session: Session = Depends(get_sess
     if not tender.url:
         raise HTTPException(422, "La licitación no tiene URL de documento.")
     text = _pliego_text(session, tender, refresh=True)
+    _sync_expedient_folders(session, tender)  # sube el pliego a 00_originales del expediente
     return {
         "cached": bool(text),
         "chars": len(text or ""),
@@ -1203,7 +1204,8 @@ def mark_interesting(tender_id: str, session: Session = Depends(get_session)) ->
         "workspace": workspace,
         "folders": _WORKSPACE_FOLDERS,
         "required_documents": _REQUIRED_DOCS,
-        "note": "Carpeta de expediente lógica; el almacenamiento de ficheros (MinIO/S3) es futuro.",
+        "note": "Cada carpeta se rellena al hacer su acción (analizar pliego, generar "
+        "borradores, preparar paquete). También puedes subir ficheros a mano.",
     }
 
 
@@ -1237,6 +1239,7 @@ def _generate_and_store_drafts(session: Session, tender: Tender) -> list[Generat
         session.add(row)
         rows.append(row)
     session.commit()
+    _sync_expedient_folders(session, tender)  # borradores + pliego → sus carpetas del expediente
     return rows
 
 
@@ -1339,17 +1342,37 @@ def _store_expedient_file(
     )
 
 
-def _autofill_expedient(session: Session, tender: Tender, rows: list) -> None:
-    """Sube automáticamente los borradores (.md) y el paquete Word al expediente (no bloqueante)."""
+def _sync_expedient_folders(session: Session, tender: Tender) -> None:
+    """Sincroniza el expediente con lo disponible, cada cosa en su carpeta (idempotente):
+    pliego extraído → 00_originales; cada borrador → su carpeta (_DRAFT_FOLDER). No bloqueante.
+    Se llama tras cada acción (analizar pliego, reanalizar, generar borradores) para que las
+    carpetas reflejen el estado real sin esperar a «Preparar paquete».
+    """
     if not storage.is_configured():
         return
     try:
-        for r in rows:
+        if tender.document_text:
+            _store_expedient_file(
+                session, tender.id, "00_originales", "pliego-extraido.txt",
+                tender.document_text.encode("utf-8"), "text/plain; charset=utf-8",
+            )
+        for r in _drafts_for(session, tender.id):
             folder = _DRAFT_FOLDER.get(r.kind, "02_borradores_oferta")
             _store_expedient_file(
                 session, tender.id, folder, f"{r.kind}.md",
-                (r.content or "").encode("utf-8"), "text/markdown",
+                (r.content or "").encode("utf-8"), "text/markdown; charset=utf-8",
             )
+        session.commit()
+    except Exception:  # noqa: BLE001
+        session.rollback()  # sincronizar carpetas nunca debe romper la acción principal
+
+
+def _autofill_expedient(session: Session, tender: Tender, rows: list) -> None:
+    """Al preparar el paquete: sincroniza carpetas + sube el paquete Word a 99_presentacion."""
+    if not storage.is_configured():
+        return
+    _sync_expedient_folders(session, tender)
+    try:
         from tender_api.routers.profile import _get_or_create
 
         p = _get_or_create(session)
@@ -1408,8 +1431,8 @@ def prepare_submission_package(tender_id: str, session: Session = Depends(get_se
         "required_documents": _REQUIRED_DOCS,
         "pending_human": _PENDING_HUMAN,
         "manifest_md": "\n".join(manifest_lines),
-        "note": "Borradores listos en el expediente. Subida de binarios y presentación: "
-        "revisión humana + MinIO/S3.",
+        "note": "Borradores y paquete Word subidos a las carpetas del expediente. "
+        "Presentación: revisión humana antes de enviar.",
     }
 
 
