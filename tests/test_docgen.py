@@ -36,6 +36,20 @@ def test_docx_and_pdf_download(client):
     assert pdf.content[:4] == b"%PDF"
 
 
+def test_docx_markdown_mermaid_fallback(monkeypatch):
+    # Sin red (kroki devuelve None) → el bloque mermaid cae a texto; el fence no queda literal.
+    from docx import Document
+
+    from tender_api.services import docgen
+
+    monkeypatch.setattr(docgen, "_mermaid_png", lambda code: None)
+    doc = Document()
+    docgen._docx_markdown(doc, "## Arquitectura\n\n```mermaid\nflowchart TD\n  A-->B\n```\n\nFin.")
+    texts = "\n".join(p.text for p in doc.paragraphs)
+    assert "```" not in texts  # el fence se consumió (no aparece como texto)
+    assert "Fin." in texts  # el contenido posterior se sigue procesando
+
+
 def test_plan_xlsx_download(client):
     t = make_tender(client)
     r = client.get(f"/api/tenders/{t['id']}/plan.xlsx")

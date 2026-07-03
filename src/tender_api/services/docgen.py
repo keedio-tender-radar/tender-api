@@ -371,8 +371,40 @@ def _docx_plan(doc, drafts, team, rate, margin) -> None:
     ).italic = True
 
 
+@functools.lru_cache(maxsize=32)
+def _mermaid_png(code: str) -> bytes | None:
+    """Renderiza un diagrama Mermaid a PNG vía kroki.io. None si falla (→ fallback a texto)."""
+    if not code.strip():
+        return None
+    try:
+        import httpx
+
+        resp = httpx.post(
+            "https://kroki.io/mermaid/png",
+            content=code.encode("utf-8"),
+            headers={"Content-Type": "text/plain"},
+            timeout=25,
+        )
+        if resp.status_code == 200 and resp.content[:8] == b"\x89PNG\r\n\x1a\n":
+            return resp.content
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _read_fence(lines: list[str], i: int) -> tuple[str, str, int]:
+    """Lee un bloque ```lang ... ``` desde i. Devuelve (lang, código, índice siguiente)."""
+    lang = lines[i].strip()[3:].strip().lower()
+    code_lines: list[str] = []
+    i += 1
+    while i < len(lines) and not lines[i].strip().startswith("```"):
+        code_lines.append(lines[i])
+        i += 1
+    return lang, "\n".join(code_lines).strip(), i + 1
+
+
 def _docx_markdown(doc, md: str) -> None:
-    from docx.shared import Pt
+    from docx.shared import Inches, Pt
 
     lines = md.split("\n")
     i = 0
@@ -381,6 +413,17 @@ def _docx_markdown(doc, md: str) -> None:
         stripped = line.strip()
         if not stripped:
             i += 1
+            continue
+        if stripped.startswith("```"):
+            lang, code, i = _read_fence(lines, i)
+            png = _mermaid_png(code) if lang == "mermaid" else None
+            if png:
+                try:
+                    doc.add_picture(BytesIO(png), width=Inches(6.0))
+                except Exception:  # noqa: BLE001
+                    doc.add_paragraph(code)
+            elif code:
+                doc.add_paragraph(code)  # fallback: código como texto
             continue
         if stripped.startswith("|"):
             rows, i = _parse_table(lines, i)
@@ -749,6 +792,20 @@ def _pdf_markdown(pdf, md: str) -> None:
         stripped = lines[i].strip()
         if not stripped:
             i += 1
+            continue
+        if stripped.startswith("```"):
+            lang, code, i = _read_fence(lines, i)
+            png = _mermaid_png(code) if lang == "mermaid" else None
+            if png:
+                try:
+                    pdf.image(BytesIO(png), x=pdf.l_margin, w=150)
+                    pdf.ln(2)
+                except Exception:  # noqa: BLE001
+                    pdf.set_font("Helvetica", "", 8)
+                    _mc(pdf, 4, _latin1(code))
+            elif code:
+                pdf.set_font("Helvetica", "", 8)
+                _mc(pdf, 4, _latin1(code))  # fallback: código como texto
             continue
         if stripped.startswith("|"):
             rows, i = _parse_table(lines, i)
