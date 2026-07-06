@@ -12,7 +12,7 @@ import json
 from datetime import UTC, date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from tender_api.config import settings
@@ -43,6 +43,10 @@ _BACKUP_MODELS = [
 ]
 _PREFIX = "backups/"
 _RETENTION_DAYS = 30
+# Retención de datos operativos (política de retención, ver /legal). Solo tablas de "ruido"
+# observacional/histórico; nunca licitaciones, scores, decisiones ni expedientes.
+_RUNLOG_RETENTION_DAYS = 90
+_SNAPSHOT_RETENTION_DAYS = 365
 
 
 def _require_run_token(x_run_token: str = Header(default="")) -> None:
@@ -105,6 +109,23 @@ def create_backup(session: Session = Depends(get_session)) -> dict:
         "bytes": len(blob),
         "pruned": _prune_old(),
     }
+
+
+@router.post("/prune", dependencies=[Depends(_require_run_token)])
+def prune_old_data(session: Session = Depends(get_session)) -> dict:
+    """Retención: borra RunLog >90d y DailySnapshot >365d. Uso interno (cron semanal).
+
+    Solo purga ruido observacional/histórico; nunca licitaciones, scores, decisiones ni ofertas.
+    """
+    now = datetime.now(UTC)
+    runlog_cut = now - timedelta(days=_RUNLOG_RETENTION_DAYS)
+    snap_cut = (now - timedelta(days=_SNAPSHOT_RETENTION_DAYS)).date()
+    logs = session.execute(delete(RunLog).where(RunLog.created_at < runlog_cut)).rowcount
+    snaps = session.execute(
+        delete(DailySnapshot).where(DailySnapshot.snapshot_date < snap_cut)
+    ).rowcount
+    session.commit()
+    return {"run_logs_deleted": logs, "snapshots_deleted": snaps}
 
 
 @router.get("/backups", dependencies=[Depends(_require_run_token)])

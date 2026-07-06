@@ -41,3 +41,12 @@ def test_backup_503_without_storage(client, monkeypatch):
     monkeypatch.setattr(storage, "is_configured", lambda: False)
     r = client.post("/api/admin/backup", headers={"X-Run-Token": "RT"})
     assert r.status_code == 503
+
+
+def test_prune_requires_token_and_returns_counts(client, monkeypatch):
+    monkeypatch.setattr(settings, "run_token", "RT")
+    assert client.post("/api/admin/prune").status_code == 401
+    r = client.post("/api/admin/prune", headers={"X-Run-Token": "RT"})
+    assert r.status_code == 200
+    body = r.json()
+    assert "run_logs_deleted" in body and "snapshots_deleted" in body
