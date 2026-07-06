@@ -1314,6 +1314,7 @@ _DRAFT_FOLDER = {
     "memoria_tecnica": "04_tecnico",
     "matriz_cumplimiento": "02_borradores_oferta",
     "checklist_administrativo": "03_administrativo",
+    "documentos_requeridos": "03_administrativo",
 }
 _PENDING_HUMAN = [
     "Firma electrónica y certificados (ROLECE, DEUC, poderes)",
@@ -1369,7 +1370,8 @@ def _sync_expedient_folders(session: Session, tender: Tender) -> None:
 
 
 def _autofill_expedient(session: Session, tender: Tender, rows: list) -> None:
-    """Al preparar el paquete: sincroniza carpetas + sube el paquete Word a 99_presentacion."""
+    """Al preparar el paquete: sincroniza carpetas + sube el Word (99_presentacion) y los dos
+    modelos económicos en Excel (05_economico). Cada entregable acaba en su carpeta."""
     if not storage.is_configured():
         return
     _sync_expedient_folders(session, tender)
@@ -1377,13 +1379,24 @@ def _autofill_expedient(session: Session, tender: Tender, rows: list) -> None:
         from tender_api.routers.profile import _get_or_create
 
         p = _get_or_create(session)
-        docx = docgen.build_docx(
-            tender, _drafts_for(session, tender.id), _latest_score(session, tender.id),
-            team=list(p.team or []), months=p.project_months, rate=p.hourly_rate, margin=p.margin,
-        )
+        drafts = _drafts_for(session, tender.id)
+        score = _latest_score(session, tender.id)
+        slug = _slug(tender.title)
+        kw = {
+            "team": list(p.team or []), "months": p.project_months,
+            "rate": p.hourly_rate, "margin": p.margin,
+        }
+        docx = docgen.build_docx(tender, drafts, score, **kw)
         _store_expedient_file(
-            session, tender.id, "99_presentacion", f"{_slug(tender.title)}-oferta.docx", docx,
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            session, tender.id, "99_presentacion", f"{slug}-oferta.docx", docx, _DOCX_MEDIA
+        )
+        det = xlsxmodels.build_plan_exhaustivo(tender, score, drafts, **kw)
+        _store_expedient_file(
+            session, tender.id, "05_economico", f"{slug}-plan-detallado.xlsx", det, _XLSX_MEDIA
+        )
+        agil = xlsxmodels.build_plan_agil(tender, score, drafts, **kw)
+        _store_expedient_file(
+            session, tender.id, "05_economico", f"{slug}-plan-agil.xlsx", agil, _XLSX_MEDIA
         )
         session.commit()
     except Exception:  # noqa: BLE001
@@ -1493,6 +1506,7 @@ def download_project_plan(tender_id: str, session: Session = Depends(get_session
 
 
 _XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
 def _xlsx_response(data: bytes, filename: str) -> Response:
