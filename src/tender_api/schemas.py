@@ -93,6 +93,7 @@ class DecisionCreate(BaseModel):
     bid_amount: float | None = None
     reason: str | None = None
     notes: str | None = None
+    actor: str | None = None  # quién registra la decisión (identidad del dashboard)
     tags: list[str] = Field(default_factory=list)
 
 

@@ -19,6 +19,7 @@ _COLUMN_MIGRATIONS = [
     ("tenders", "document_text", "VARCHAR"),
     ("tenders", "document_extracted_at", "TIMESTAMPTZ"),
     ("tender_chunks", "embedding", "JSONB"),
+    ("tender_decisions", "actor", "VARCHAR"),
 ]
 
 

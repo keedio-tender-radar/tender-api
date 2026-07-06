@@ -1227,7 +1227,7 @@ def activity(tender_id: str, session: Session = Depends(get_session)) -> list[di
         outcome = f" → {d.outcome}" if d.outcome else ""
         events.append({
             "kind": "decision", "at": d.created_at.isoformat(),
-            "text": f"{d.decision}{outcome}", "actor": None, "detail": d.reason,
+            "text": f"{d.decision}{outcome}", "actor": d.actor, "detail": d.reason,
         })
     for n in session.scalars(
         select(TenderNote).where(TenderNote.tender_id == tender_id)
