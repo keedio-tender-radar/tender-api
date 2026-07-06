@@ -911,6 +911,118 @@ def _pdf_markdown(pdf, md: str) -> None:
         i += 1
 
 
+def _money_es(n) -> str:
+    if not n:
+        return "s/d"
+    return f"{n:,.0f} EUR".replace(",", ".")
+
+
+def _pct_es(x) -> str:
+    return f"{x * 100:.1f}%" if x is not None else "s/d"
+
+
+def _report_section(pdf, title: str, header: list[str], rows: list[list]) -> None:
+    """Título de sección (marca) + tabla, para el informe de mercado."""
+    if not rows:
+        return
+    pdf.set_text_color(*BRAND)
+    pdf.set_font("Helvetica", "B", 11)
+    _mc(pdf, 7, _latin1(title))
+    pdf.set_text_color(40, 40, 40)
+    _pdf_table(pdf, [header, *rows])
+    pdf.ln(1)
+
+
+def build_market_pdf(
+    overview: dict, competitors: list, buyers: list, divisions: list
+) -> bytes:
+    """Informe de inteligencia de mercado (PDF con marca Keedio) para dirección."""
+    from fpdf import FPDF
+
+    class _RepPDF(FPDF):
+        def footer(self) -> None:
+            self.set_y(-12)
+            self.set_draw_color(220, 224, 232)
+            self.set_line_width(0.2)
+            self.line(self.l_margin, self.get_y(), 210 - self.r_margin, self.get_y())
+            self.set_y(-10)
+            self.set_font("Helvetica", "", 7)
+            self.set_text_color(150, 150, 150)
+            self.cell(95, 5, _latin1("Confidencial - Keedio Tender Radar"), align="L", ln=0)
+            self.cell(95, 5, f"Pag. {self.page_no()}", align="R", ln=1)
+
+    pdf = _RepPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    logo = _logo_png(settings.keedio_logo_url)
+    if logo:
+        try:
+            pdf.image(BytesIO(logo), x=pdf.l_margin, y=12, h=14)
+        except Exception:
+            pass
+    pdf.set_xy(pdf.l_margin, 32)
+    pdf.set_text_color(*BRAND)
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 6, "INTELIGENCIA DE MERCADO", ln=1)
+    pdf.set_text_color(20, 20, 20)
+    pdf.set_font("Helvetica", "B", 20)
+    _mc(pdf, 9, "Informe de contratacion publica")
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(120, 120, 120)
+    _mc(pdf, 6, _latin1(
+        f"Generado el {datetime.now(UTC).date().isoformat()}  -  Keedio Tender Radar"
+    ))
+    pdf.ln(4)
+
+    conc = overview.get("concentration") or {}
+    pdf.set_text_color(*BRAND)
+    pdf.set_font("Helvetica", "B", 11)
+    _mc(pdf, 7, "Resumen del mercado")
+    pdf.set_text_color(40, 40, 40)
+    pdf.set_font("Helvetica", "", 10)
+    _mc(pdf, 6, _latin1(f"Adjudicaciones analizadas: {overview.get('awards', 0)}"))
+    _mc(pdf, 6, _latin1(f"Importe adjudicado total: {_money_es(overview.get('total_awarded'))}"))
+    _mc(pdf, 6, _latin1(f"Baja media: {_pct_es(overview.get('avg_baja'))}"))
+    _mc(pdf, 6, _latin1(
+        f"Concentracion (HHI): {conc.get('label', 's/d')} "
+        f"({conc.get('hhi', '-')}, {conc.get('competitors', 0)} competidores)"
+    ))
+    pdf.ln(3)
+
+    _report_section(
+        pdf, "Adjudicatarios lideres",
+        ["Adjudicatario", "Contratos", "Importe", "Baja", "Cuota"],
+        [
+            [
+                str(c.get("supplier", ""))[:38], str(c.get("wins", "")),
+                _money_es(c.get("total_awarded")), _pct_es(c.get("avg_baja")),
+                _pct_es(c.get("share")),
+            ]
+            for c in competitors[:10]
+        ],
+    )
+    _report_section(
+        pdf, "Organos compradores recurrentes",
+        ["Organo", "Adjudicaciones", "Importe"],
+        [
+            [str(b.get("buyer", ""))[:48], str(b.get("awards", "")),
+             _money_es(b.get("total_awarded"))]
+            for b in buyers[:10]
+        ],
+    )
+    _report_section(
+        pdf, "Categorias CPV por volumen",
+        ["Division CPV", "Adjudicaciones", "Importe"],
+        [
+            [str(d.get("cpv_division", "") or "s/d"), str(d.get("awards", "")),
+             _money_es(d.get("total_awarded"))]
+            for d in divisions[:10]
+        ],
+    )
+    return bytes(pdf.output())
+
+
 def _pdf_table(pdf, rows: list[list[str]]) -> None:
     if not rows:
         return

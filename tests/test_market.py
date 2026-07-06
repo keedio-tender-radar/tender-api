@@ -17,6 +17,21 @@ def _award(**over) -> dict:
     return base
 
 
+def test_market_report_pdf(client):
+    client.post("/api/market/awards", json=[_award(source_id="R-1")])
+    r = client.get("/api/market/report.pdf")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/pdf"
+    assert r.content[:4] == b"%PDF"
+
+
+def test_market_report_pdf_empty(client):
+    # Sin adjudicaciones aún: el informe se genera igualmente (no rompe).
+    r = client.get("/api/market/report.pdf")
+    assert r.status_code == 200
+    assert r.content[:4] == b"%PDF"
+
+
 def test_ingest_awards_idempotent(client):
     a = _award()
     r1 = client.post("/api/market/awards", json=[a])

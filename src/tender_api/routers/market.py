@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from tender_api.config import settings
 from tender_api.database import get_session
 from tender_api.models import Award, Tender
+from tender_api.services import docgen
 
 router = APIRouter(prefix="/api/market", tags=["market"])
 
@@ -320,6 +321,23 @@ def overview(session: Session = Depends(get_session)) -> dict:
         "top_buyer": top_buyer[0] if top_buyer else None,
         "top_cpv_division": top_cpv[0] if top_cpv else None,
     }
+
+
+@router.get("/report.pdf")
+def market_report_pdf(session: Session = Depends(get_session)) -> Response:
+    """Informe de inteligencia de mercado en PDF (marca Keedio) para dirección."""
+    rows = list(session.scalars(select(Award)).all())
+    data = docgen.build_market_pdf(
+        overview(session),
+        _competitors(rows, 10),
+        _group_totals(rows, "buyer")[:10],
+        _group_totals(rows, "cpv_division")[:10],
+    )
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="informe-mercado.pdf"'},
+    )
 
 
 @router.get("/competitor")
