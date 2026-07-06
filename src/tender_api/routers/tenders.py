@@ -1647,6 +1647,42 @@ def download_plan_detallado(tender_id: str, session: Session = Depends(get_sessi
     return _xlsx_response(data, f"{_slug(tender.title)}-plan-detallado.xlsx")
 
 
+@router.get("/{tender_id}/expediente.zip")
+def download_expediente_zip(
+    tender_id: str, session: Session = Depends(get_session)
+) -> Response:
+    """Descarga TODO el expediente en un .zip (todos los ficheros con su estructura de carpetas)."""
+    import zipfile
+
+    tender = _get_or_404(session, tender_id)
+    if not storage.is_configured():
+        raise HTTPException(503, "Almacenamiento no configurado.")
+    rows = session.scalars(
+        select(TenderDocument)
+        .where(TenderDocument.tender_id == tender_id)
+        .order_by(TenderDocument.folder, TenderDocument.filename)
+    ).all()
+    if not rows:
+        raise HTTPException(
+            404, "El expediente aún no tiene ficheros. Genera los borradores o prepara el paquete."
+        )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for r in rows:
+            try:
+                data, _ = storage.fetch(r.storage_key)
+            except Exception:  # noqa: BLE001 — un fichero ilegible no debe romper el zip
+                continue
+            zf.writestr(f"{r.folder}/{r.filename}", data)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{_slug(tender.title)}-expediente.zip"'
+        },
+    )
+
+
 @router.get("/{tender_id}/package.docx")
 def download_package_docx(tender_id: str, session: Session = Depends(get_session)) -> Response:
     """Paquete de oferta en Word (.docx) con marca Keedio, tablas y figuras."""

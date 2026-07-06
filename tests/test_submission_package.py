@@ -89,3 +89,39 @@ def test_upload_list_download_delete_flow(client, monkeypatch):
 
     assert client.delete(f"/api/tenders/{t['id']}/documents/{doc['id']}").status_code == 200
     assert client.get(f"/api/tenders/{t['id']}/documents").json()["files"] == []
+
+
+def test_expediente_zip(client, monkeypatch):
+    import io
+    import zipfile
+
+    from tender_api.services import storage
+
+    monkeypatch.setattr(settings, "insforge_api_url", "http://ins")
+    monkeypatch.setattr(settings, "insforge_api_key", "k")
+    store: dict[str, tuple[bytes, str]] = {}
+
+    def _fake_put(key, data, ct="application/octet-stream"):
+        store[key] = (data, ct)
+        return key
+
+    monkeypatch.setattr(storage, "put_bytes", _fake_put)
+    monkeypatch.setattr(storage, "fetch", lambda key: store[key])
+
+    t = make_tender(client)
+    client.post(
+        f"/api/tenders/{t['id']}/documents/upload",
+        files={"file": ("a.pdf", b"AAA", "application/pdf")},
+        data={"folder": "00_originales"},
+    )
+    client.post(
+        f"/api/tenders/{t['id']}/documents/upload",
+        files={"file": ("b.md", b"BBB", "text/markdown")},
+        data={"folder": "02_borradores_oferta"},
+    )
+    r = client.get(f"/api/tenders/{t['id']}/expediente.zip")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/zip"
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    assert set(z.namelist()) == {"00_originales/a.pdf", "02_borradores_oferta/b.md"}
+    assert z.read("00_originales/a.pdf") == b"AAA"
