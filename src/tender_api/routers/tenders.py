@@ -1016,13 +1016,35 @@ def mark_alerted(tender_id: str, session: Session = Depends(get_session)) -> dic
     return {"tender_id": tender_id, "alerted": True}
 
 
+def _reminder_band(deadline) -> str | None:
+    """Umbral de recordatorio según días restantes: 1 (≤1d), 3 (≤3d), 7 (≤7d), o None."""
+    d = semaphore.days_remaining(deadline)
+    if d is None or d < 0:
+        return None
+    if d <= 1:
+        return "1"
+    if d <= 3:
+        return "3"
+    if d <= 7:
+        return "7"
+    return None
+
+
 @router.post("/{tender_id}/mark-reminded", status_code=201)
 def mark_reminded(tender_id: str, session: Session = Depends(get_session)) -> dict:
-    """Marca una licitación como ya recordada (cierre próximo). Uso interno del bot."""
-    _get_or_404(session, tender_id)
-    session.add(TenderAction(tender_id=tender_id, action="reminded", actor="reminders"))
-    session.commit()
-    return {"tender_id": tender_id, "reminded": True}
+    """Marca la licitación como recordada EN SU UMBRAL actual (permite re-recordar al escalar)."""
+    tender = _get_or_404(session, tender_id)
+    band = _reminder_band(tender.deadline) or "7"
+    action = f"reminded_{band}"
+    exists = session.scalar(
+        select(TenderAction).where(
+            TenderAction.tender_id == tender_id, TenderAction.action == action
+        )
+    )
+    if not exists:
+        session.add(TenderAction(tender_id=tender_id, action=action, actor="reminders"))
+        session.commit()
+    return {"tender_id": tender_id, "reminded": True, "band": band}
 
 
 @router.get("/closing-soon", response_model=list[TenderWithScore])
@@ -1044,12 +1066,15 @@ def closing_soon(
     ).all()
     out = []
     for t in rows:
-        reminded = session.scalar(
+        band = _reminder_band(t.deadline)  # 7 → 3 → 1: re-recuerda al entrar en un umbral más corto
+        if band is None:
+            continue
+        already = session.scalar(
             select(TenderAction).where(
-                TenderAction.tender_id == t.id, TenderAction.action == "reminded"
+                TenderAction.tender_id == t.id, TenderAction.action == f"reminded_{band}"
             )
         )
-        if reminded:
+        if already:
             continue
         score = _latest_score(session, t.id)
         out.append(
