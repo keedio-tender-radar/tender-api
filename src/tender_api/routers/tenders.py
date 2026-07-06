@@ -1147,6 +1147,43 @@ def expedientes(session: Session = Depends(get_session)) -> list[dict]:
     return out
 
 
+@router.get("/outcomes-summary")
+def outcomes_summary(session: Session = Depends(get_session)) -> dict:
+    """Agregado del pipeline: presentadas, ganadas/perdidas, win-rate y valor adjudicado.
+
+    Toma la ÚLTIMA decisión de cada licitación (por si hubo re-registros).
+    """
+    from tender_api.routers.profile import _LOST, _WON
+
+    latest: dict[str, TenderDecision] = {}
+    for d in session.scalars(
+        select(TenderDecision).order_by(TenderDecision.created_at.desc())
+    ).all():
+        latest.setdefault(d.tender_id, d)  # el primero (más reciente) gana
+
+    by_outcome: dict[str, int] = {}
+    won_value = 0.0
+    for d in latest.values():
+        oc = (d.outcome or "pendiente").strip().lower()
+        by_outcome[oc] = by_outcome.get(oc, 0) + 1
+        if oc in _WON and d.awarded_amount:
+            won_value += d.awarded_amount
+
+    won = sum(c for o, c in by_outcome.items() if o in _WON)
+    lost = sum(c for o, c in by_outcome.items() if o in _LOST)
+    presented = sum(c for o, c in by_outcome.items() if o in _WON | _LOST | {"presentada"})
+    decided = won + lost
+    return {
+        "total_decisions": len(latest),
+        "presented": presented,
+        "won": won,
+        "lost": lost,
+        "win_rate": round(won / decided * 100) if decided else None,
+        "won_value": won_value,
+        "by_outcome": by_outcome,
+    }
+
+
 @router.post("/{tender_id}/notes", status_code=201)
 def add_note(tender_id: str, payload: dict, session: Session = Depends(get_session)) -> dict:
     """Añade una nota/comentario del equipo a la licitación."""
