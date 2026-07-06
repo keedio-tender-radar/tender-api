@@ -9,6 +9,7 @@ from tender_api.config import settings
 from tender_api.database import init_db
 from tender_api.routers import (
     actions,
+    admin,
     alerts,
     auth,
     market,
@@ -49,6 +50,7 @@ app.include_router(runs.router, dependencies=_guard)
 app.include_router(alerts.router, dependencies=_guard)
 app.include_router(market.router, dependencies=_guard)
 app.include_router(reports.router, dependencies=_guard)
+app.include_router(admin.router)  # auto-protegido por RUN_TOKEN (backup de BD)
 
 
 @app.get("/health", tags=["meta"])
