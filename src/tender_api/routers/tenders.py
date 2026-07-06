@@ -1086,6 +1086,56 @@ def closing_soon(
     return out
 
 
+@router.get("/expedientes")
+def expedientes(session: Session = Depends(get_session)) -> list[dict]:
+    """Bandeja de expedientes en curso (seguimiento) con su completitud y cierre.
+
+    Completitud por hitos: pliego analizado → borradores generados → paquete preparado.
+    """
+    rows = session.scalars(
+        select(Tender)
+        .where(Tender.duplicate_of.is_(None))
+        .where(Tender.status.in_(["interested", "partner"]))
+        .order_by(Tender.deadline.asc().nulls_last())
+    ).all()
+    out: list[dict] = []
+    for t in rows:
+        score = _latest_score(session, t.id)
+        n_drafts = (
+            session.scalar(
+                select(func.count()).select_from(GeneratedDocument).where(
+                    GeneratedDocument.tender_id == t.id
+                )
+            )
+            or 0
+        )
+        n_files = (
+            session.scalar(
+                select(func.count()).select_from(TenderDocument).where(
+                    TenderDocument.tender_id == t.id
+                )
+            )
+            or 0
+        )
+        steps = {
+            "pliego": bool(t.document_text),
+            "borradores": n_drafts > 0,
+            "paquete": n_files > 0,
+        }
+        done = sum(1 for v in steps.values() if v)
+        out.append(
+            {
+                "tender": tender_to_contract(t).model_dump(mode="json"),
+                "score": score_to_contract(score).model_dump(mode="json") if score else None,
+                "steps": steps,
+                "completeness": round(done / len(steps) * 100),
+                "docs_count": n_files,
+                "days_remaining": semaphore.days_remaining(t.deadline),
+            }
+        )
+    return out
+
+
 @router.post("/{tender_id}/notes", status_code=201)
 def add_note(tender_id: str, payload: dict, session: Session = Depends(get_session)) -> dict:
     """Añade una nota/comentario del equipo a la licitación."""
