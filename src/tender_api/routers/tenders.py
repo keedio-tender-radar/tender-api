@@ -1401,6 +1401,7 @@ _DRAFT_FOLDER = {
     "matriz_cumplimiento": "02_borradores_oferta",
     "checklist_administrativo": "03_administrativo",
     "documentos_requeridos": "03_administrativo",
+    "carta_presentacion": "03_administrativo",
 }
 _PENDING_HUMAN = [
     "Firma electrónica y certificados (ROLECE, DEUC, poderes)",
