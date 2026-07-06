@@ -1098,28 +1098,39 @@ def expedientes(session: Session = Depends(get_session)) -> list[dict]:
         .where(Tender.status.in_(["interested", "partner"]))
         .order_by(Tender.deadline.asc().nulls_last())
     ).all()
+    ids = [t.id for t in rows]
+    # Consultas batcheadas (evita N+1): último score + nº de borradores + nº de ficheros.
+    latest_score: dict[str, object] = {}
+    draft_counts: dict[str, int] = {}
+    file_counts: dict[str, int] = {}
+    if ids:
+        for s in session.scalars(
+            select(TenderScore)
+            .where(TenderScore.tender_id.in_(ids))
+            .order_by(TenderScore.created_at.desc())
+        ).all():
+            latest_score.setdefault(s.tender_id, s)  # el primero (más reciente) gana
+        draft_counts = dict(
+            session.execute(
+                select(GeneratedDocument.tender_id, func.count())
+                .where(GeneratedDocument.tender_id.in_(ids))
+                .group_by(GeneratedDocument.tender_id)
+            ).all()
+        )
+        file_counts = dict(
+            session.execute(
+                select(TenderDocument.tender_id, func.count())
+                .where(TenderDocument.tender_id.in_(ids))
+                .group_by(TenderDocument.tender_id)
+            ).all()
+        )
     out: list[dict] = []
     for t in rows:
-        score = _latest_score(session, t.id)
-        n_drafts = (
-            session.scalar(
-                select(func.count()).select_from(GeneratedDocument).where(
-                    GeneratedDocument.tender_id == t.id
-                )
-            )
-            or 0
-        )
-        n_files = (
-            session.scalar(
-                select(func.count()).select_from(TenderDocument).where(
-                    TenderDocument.tender_id == t.id
-                )
-            )
-            or 0
-        )
+        score = latest_score.get(t.id)
+        n_files = file_counts.get(t.id, 0)
         steps = {
             "pliego": bool(t.document_text),
-            "borradores": n_drafts > 0,
+            "borradores": draft_counts.get(t.id, 0) > 0,
             "paquete": n_files > 0,
         }
         done = sum(1 for v in steps.values() if v)
@@ -1475,7 +1486,8 @@ def _autofill_expedient(session: Session, tender: Tender, rows: list) -> None:
             "team": list(p.team or []), "months": p.project_months,
             "rate": p.hourly_rate, "margin": p.margin,
         }
-        docx = docgen.build_docx(tender, drafts, score, **kw)
+        mkt = market.compute_context(session, tender.cpv, buyer=tender.buyer)
+        docx = docgen.build_docx(tender, drafts, score, **kw, market=mkt)
         _store_expedient_file(
             session, tender.id, "99_presentacion", f"{slug}-oferta.docx", docx, _DOCX_MEDIA
         )
@@ -1645,6 +1657,7 @@ def download_package_docx(tender_id: str, session: Session = Depends(get_session
     data = docgen.build_docx(
         tender, _drafts_for(session, tender_id), _latest_score(session, tender_id),
         team=list(p.team or []), months=p.project_months, rate=p.hourly_rate, margin=p.margin,
+        market=market.compute_context(session, tender.cpv, buyer=tender.buyer),
     )
     return Response(
         content=data,
@@ -1665,6 +1678,7 @@ def download_package_pdf(tender_id: str, session: Session = Depends(get_session)
     data = docgen.build_pdf(
         tender, _drafts_for(session, tender_id), _latest_score(session, tender_id),
         team=list(p.team or []), months=p.project_months, rate=p.hourly_rate, margin=p.margin,
+        market=market.compute_context(session, tender.cpv, buyer=tender.buyer),
     )
     return Response(
         content=data,

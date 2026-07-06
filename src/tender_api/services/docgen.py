@@ -196,7 +196,9 @@ def _docx_cover(doc, tender, score) -> None:
     doc.add_page_break()
 
 
-def build_docx(tender, drafts, score, team=None, months=None, rate=None, margin=None) -> bytes:
+def build_docx(
+    tender, drafts, score, team=None, months=None, rate=None, margin=None, market=None
+) -> bytes:
     from docx import Document
 
     months = months or GANTT_MONTHS
@@ -236,6 +238,7 @@ def build_docx(tender, drafts, score, team=None, months=None, rate=None, margin=
             cells[mth].text = "█" if start <= mth <= end else ""
 
     _docx_figures(doc, tender, score, team)
+    _docx_market(doc, market)
     _docx_plan(doc, drafts, team, rate, margin)
 
     # Borradores.
@@ -339,6 +342,43 @@ def _plan_data(drafts, team, rate, margin):
     total = sum(h for _, h in rows)
     price = total * rate * 1.04 * (1 + margin)
     return rows, total, rate, margin, price
+
+
+def _docx_market(doc, market) -> None:
+    """Sección de mercado y competencia (incumbente, baja esperada, quién suele ganar)."""
+    if not market or (market.get("sample_size") or 0) == 0:
+        return
+    doc.add_heading("Mercado y competencia", level=2)
+    inc = market.get("incumbent") or {}
+    if inc.get("supplier"):
+        p = doc.add_paragraph()
+        p.add_run("Incumbente a batir: ").bold = True
+        extra = f" ({inc['award_date']})" if inc.get("award_date") else ""
+        p.add_run(f"{inc['supplier']}{extra}")
+    baja = market.get("expected_baja")
+    if baja is not None:
+        p = doc.add_paragraph()
+        p.add_run("Baja media esperada: ").bold = True
+        p.add_run(f"{baja * 100:.1f}%")
+    conc = market.get("concentration") or {}
+    if conc.get("label"):
+        doc.add_paragraph(
+            f"Concentración del mercado: {conc['label']} "
+            f"({conc.get('competitors')} competidores)."
+        )
+    winners = market.get("likely_winners") or []
+    if winners:
+        doc.add_paragraph("Quién suele ganar esta categoría:").runs[0].bold = True
+        table = doc.add_table(rows=1, cols=3)
+        table.style = "Light Grid Accent 1"
+        hdr = table.rows[0].cells
+        hdr[0].text, hdr[1].text, hdr[2].text = "Adjudicatario", "Contratos", "Baja media"
+        for w in winners[:5]:
+            cells = table.add_row().cells
+            cells[0].text = str(w.get("supplier", ""))
+            cells[1].text = str(w.get("wins", ""))
+            b = w.get("avg_baja")
+            cells[2].text = f"{b * 100:.1f}%" if b is not None else "s/d"
 
 
 def _docx_plan(doc, drafts, team, rate, margin) -> None:
@@ -519,7 +559,9 @@ def _pdf_cover(pdf, tender, score) -> None:
     )
 
 
-def build_pdf(tender, drafts, score, team=None, months=None, rate=None, margin=None) -> bytes:
+def build_pdf(
+    tender, drafts, score, team=None, months=None, rate=None, margin=None, market=None
+) -> bytes:
     from fpdf import FPDF
 
     class _OfferPDF(FPDF):
@@ -619,6 +661,7 @@ def build_pdf(tender, drafts, score, team=None, months=None, rate=None, margin=N
     pdf.ln(3)
 
     _pdf_figures(pdf, tender, score, team)
+    _pdf_market(pdf, market)
     _pdf_plan(pdf, drafts, team, rate, margin)
 
     for d in drafts:
@@ -751,6 +794,45 @@ def _pdf_figures(pdf, tender, score, team=None) -> None:
         pdf.set_xy(bx, cy + 1.5)
         pdf.cell(cw, 6, _latin1(name), align="C")
     pdf.set_y(cy + bh + 4)
+
+
+def _pdf_market(pdf, market) -> None:
+    """Sección de mercado y competencia en el PDF."""
+    if not market or (market.get("sample_size") or 0) == 0:
+        return
+    pdf.set_text_color(20, 20, 20)
+    pdf.set_font("Helvetica", "B", 11)
+    _mc(pdf, 6, "Mercado y competencia")
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(60, 60, 60)
+    inc = market.get("incumbent") or {}
+    if inc.get("supplier"):
+        extra = f" ({inc['award_date']})" if inc.get("award_date") else ""
+        _mc(pdf, 5, _latin1(f"Incumbente a batir: {inc['supplier']}{extra}"))
+    baja = market.get("expected_baja")
+    if baja is not None:
+        _mc(pdf, 5, _latin1(f"Baja media esperada: {baja * 100:.1f}%"))
+    conc = market.get("concentration") or {}
+    if conc.get("label"):
+        _mc(pdf, 5, _latin1(
+            f"Concentracion del mercado: {conc['label']} ({conc.get('competitors')} competidores)"
+        ))
+    winners = market.get("likely_winners") or []
+    if winners:
+        pdf.ln(1)
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_x(pdf.l_margin)
+        pdf.cell(110, 6, "Adjudicatario", border=1, ln=0)
+        pdf.cell(35, 6, "Contratos", border=1, ln=0)
+        pdf.cell(45, 6, "Baja media", border=1, ln=1)
+        pdf.set_font("Helvetica", "", 8)
+        for w in winners[:5]:
+            b = w.get("avg_baja")
+            pdf.set_x(pdf.l_margin)
+            pdf.cell(110, 6, _latin1(str(w.get("supplier", ""))[:60]), border=1, ln=0)
+            pdf.cell(35, 6, str(w.get("wins", "")), border=1, ln=0)
+            pdf.cell(45, 6, f"{b * 100:.1f}%" if b is not None else "s/d", border=1, ln=1)
+    pdf.ln(2)
 
 
 def _pdf_plan(pdf, drafts, team, rate, margin) -> None:
