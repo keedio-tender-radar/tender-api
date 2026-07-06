@@ -1263,8 +1263,8 @@ def _slug(text: str) -> str:
 def mark_interesting(tender_id: str, session: Session = Depends(get_session)) -> dict:
     """Marca la licitación como interesante y devuelve el manifiesto de su carpeta de expediente.
 
-    El almacenamiento durable de ficheros es futuro (MinIO/S3); aquí se fija el estado, se
-    registra la acción y se devuelve la estructura de carpeta + documentos a preparar.
+    Fija el estado, registra la acción y devuelve la estructura de carpetas + documentos a
+    preparar. Los ficheros se guardan en InsForge Storage al analizar/generar/preparar paquete.
     """
     tender = _get_or_404(session, tender_id)
     tender.status = "interested"
@@ -1435,8 +1435,22 @@ def _sync_expedient_folders(session: Session, tender: Tender) -> None:
             )
         for r in _drafts_for(session, tender.id):
             folder = _DRAFT_FOLDER.get(r.kind, "02_borradores_oferta")
+            name = f"{r.kind}.md"
+            # Limpia copias huérfanas del mismo borrador en otras carpetas (por remapeo previo).
+            for old in session.scalars(
+                select(TenderDocument).where(
+                    TenderDocument.tender_id == tender.id,
+                    TenderDocument.filename == name,
+                    TenderDocument.folder != folder,
+                )
+            ).all():
+                try:
+                    storage.delete(old.storage_key)
+                except Exception:  # noqa: BLE001
+                    pass
+                session.delete(old)
             _store_expedient_file(
-                session, tender.id, folder, f"{r.kind}.md",
+                session, tender.id, folder, name,
                 (r.content or "").encode("utf-8"), "text/markdown; charset=utf-8",
             )
         session.commit()
