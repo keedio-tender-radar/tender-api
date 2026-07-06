@@ -59,6 +59,7 @@ from tender_api.services import (
     storage,
     visual_rag_client,
     xlsxgen,
+    xlsxmodels,
 )
 from tender_api.services.learning import learning_insights
 
@@ -1489,6 +1490,46 @@ def download_project_plan(tender_id: str, session: Session = Depends(get_session
             "Content-Disposition": f'attachment; filename="{_slug(tender.title)}-plan.xlsx"'
         },
     )
+
+
+_XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _xlsx_response(data: bytes, filename: str) -> Response:
+    return Response(
+        content=data,
+        media_type=_XLSX_MEDIA,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{tender_id}/plan-agil.xlsx")
+def download_plan_agil(tender_id: str, session: Session = Depends(get_session)) -> Response:
+    """Modelo ágil (5 hojas): requisitos, supuestos, costes CAPEX/OPEX, escenarios, resumen."""
+    from tender_api.routers.profile import _get_or_create
+
+    tender = _get_or_404(session, tender_id)
+    p = _get_or_create(session)
+    data = xlsxmodels.build_plan_agil(
+        tender, _latest_score(session, tender_id), _drafts_for(session, tender_id),
+        team=list(p.team or []), months=p.project_months, rate=p.hourly_rate, margin=p.margin,
+    )
+    return _xlsx_response(data, f"{_slug(tender.title)}-plan-agil.xlsx")
+
+
+@router.get("/{tender_id}/plan-detallado.xlsx")
+def download_plan_detallado(tender_id: str, session: Session = Depends(get_session)) -> Response:
+    """Modelo exhaustivo (15 hojas): Go/No-Go, expediente, jornadas, costes, precio, simuladores,
+    checklist de documentos, riesgos y maestros BASE."""
+    from tender_api.routers.profile import _get_or_create
+
+    tender = _get_or_404(session, tender_id)
+    p = _get_or_create(session)
+    data = xlsxmodels.build_plan_exhaustivo(
+        tender, _latest_score(session, tender_id), _drafts_for(session, tender_id),
+        team=list(p.team or []), months=p.project_months, rate=p.hourly_rate, margin=p.margin,
+    )
+    return _xlsx_response(data, f"{_slug(tender.title)}-plan-detallado.xlsx")
 
 
 @router.get("/{tender_id}/package.docx")
