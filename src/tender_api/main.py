@@ -2,7 +2,7 @@
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from tender_api.config import settings
@@ -18,6 +18,7 @@ from tender_api.routers import (
     scores,
     tenders,
 )
+from tender_api.routers.auth import require_access
 
 
 @asynccontextmanager
@@ -36,15 +37,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(tenders.router)
-app.include_router(scores.router)
-app.include_router(actions.router)
-app.include_router(profile.router)
+# Protección opt-in de la API (activa solo si READ_API_TOKEN está definido). auth y /health
+# quedan siempre abiertos (el gate de acceso y el healthcheck deben ser accesibles).
+_guard = [Depends(require_access)]
+app.include_router(tenders.router, dependencies=_guard)
+app.include_router(scores.router, dependencies=_guard)
+app.include_router(actions.router, dependencies=_guard)
+app.include_router(profile.router, dependencies=_guard)
 app.include_router(auth.router)
-app.include_router(runs.router)
-app.include_router(alerts.router)
-app.include_router(market.router)
-app.include_router(reports.router)
+app.include_router(runs.router, dependencies=_guard)
+app.include_router(alerts.router, dependencies=_guard)
+app.include_router(market.router, dependencies=_guard)
+app.include_router(reports.router, dependencies=_guard)
 
 
 @app.get("/health", tags=["meta"])

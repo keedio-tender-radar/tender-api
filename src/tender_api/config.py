@@ -39,6 +39,9 @@ class Settings(BaseSettings):
 
     # Gate de acceso al dashboard. Vacío = sin gate (acceso libre, comportamiento actual).
     dashboard_password: str = ""
+    # Token que EXIGE la API en las lecturas si se define. Vacío = API abierta (comportamiento
+    # actual, retrocompatible). Los servicios internos pueden usar RUN_TOKEN en su lugar.
+    read_api_token: str = ""
 
     # Telegram para alertas de observabilidad (fallos de cron). Vacío = sin alerta.
     telegram_bot_token: str = ""
