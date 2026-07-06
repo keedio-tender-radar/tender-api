@@ -22,7 +22,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import Response
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 from tender_contracts import Tender as TenderContract
 from tender_contracts import TenderScore as ScoreContract
@@ -188,7 +188,8 @@ def _aware(dt: datetime) -> datetime:
 def search_tenders(
     session: Session = Depends(get_session),
     status: str | None = Query(default=None),
-    q: str | None = Query(default=None, description="Búsqueda por título (subcadena)."),
+    q: str | None = Query(default=None, description="Búsqueda en título, resumen y pliego."),
+    cpv: str | None = Query(default=None, description="Filtra por prefijo de código CPV."),
     order: str = Query(default="recent", description="recent | score"),
     source: str | None = Query(default=None),
     contracting_body: str | None = Query(default=None, description="Órgano (subcadena)."),
@@ -209,7 +210,14 @@ def search_tenders(
     if status:
         stmt = stmt.where(Tender.status == status)
     if q:
-        stmt = stmt.where(Tender.title.ilike(f"%{q}%"))
+        like = f"%{q}%"
+        stmt = stmt.where(
+            or_(
+                Tender.title.ilike(like),
+                Tender.summary.ilike(like),
+                Tender.document_text.ilike(like),  # busca dentro del pliego extraído
+            )
+        )
     if source:
         stmt = stmt.where(Tender.source == source)
     if contracting_body:
@@ -223,6 +231,8 @@ def search_tenders(
         days = semaphore.days_remaining(r.deadline)
         light = semaphore.traffic_light(total, rec, days)["light"]
 
+        if cpv and not any((c or "").startswith(cpv) for c in (r.cpv or [])):
+            continue
         if recommendation and (rec or "").lower() != recommendation.lower():
             continue
         if traffic_light and light != traffic_light:

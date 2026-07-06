@@ -37,6 +37,10 @@ def put_score(tender_id: str, payload: ScoreUpsert, session: Session = Depends(g
     )
     session.add(row)
     tender.status = "scored"
+    # Si la licitación llegó sin resumen (p. ej. TED pone summary=None), adopta el del análisis
+    # para que las tarjetas y el listado muestren una descripción real, no solo el título.
+    if payload.summary and not (tender.summary or "").strip():
+        tender.summary = payload.summary
     session.commit()
     session.refresh(row)
     return score_to_contract(row)
