@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from tender_api.config import settings
 from tender_api.database import get_session
-from tender_api.models import Award, Tender
+from tender_api.models import Award, Tender, TenderDecision
 from tender_api.services import docgen
 
 router = APIRouter(prefix="/api/market", tags=["market"])
@@ -432,3 +432,85 @@ def tender_market_context(tender_id: str, session: Session = Depends(get_session
     if tender is None:
         raise HTTPException(404, "Licitación no encontrada")
     return compute_context(session, tender.cpv, buyer=tender.buyer)
+
+
+# --- Reconciliación con la adjudicación oficial (cierra el bucle de aprendizaje) ---
+
+
+def _require_run_token(x_run_token: str = Header(default="")) -> None:
+    if not settings.run_token or x_run_token != settings.run_token:
+        raise HTTPException(status_code=401, detail="RUN_TOKEN requerido.")
+
+
+def _match_tokens(text: str | None) -> set[str]:
+    words = re.sub(r"[^a-z0-9áéíóúñ ]", " ", (text or "").lower()).split()
+    return {w for w in words if len(w) > 3}
+
+
+def _title_similarity(a: str | None, b: str | None) -> float:
+    ta, tb = _match_tokens(a), _match_tokens(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)  # Jaccard
+
+
+def _same_buyer(a: str | None, b: str | None) -> bool:
+    na, nb = _norm_supplier(a or ""), _norm_supplier(b or "")
+    return bool(na) and bool(nb) and (na == nb or na in nb or nb in na)
+
+
+def _match_award(tender: Tender, awards: list[Award]) -> Award | None:
+    """Mejor adjudicación de esta licitación: mismo órgano + título suficientemente similar."""
+    best, best_sim = None, 0.0
+    for a in awards:
+        if not _same_buyer(tender.buyer, a.buyer):
+            continue
+        sim = _title_similarity(tender.title, a.title)
+        if sim >= 0.4 and sim > best_sim:
+            best, best_sim = a, sim
+    return best
+
+
+def _is_keedio_win(supplier: str | None) -> bool:
+    norm = (supplier or "").lower()
+    return any(name in norm for name in settings.keedio_supplier_list)
+
+
+@router.post("/reconcile-outcomes", dependencies=[Depends(_require_run_token)])
+def reconcile_outcomes(session: Session = Depends(get_session)) -> dict:
+    """Empareja las licitaciones PRESENTADAS con su adjudicación oficial y fija ganada/perdida.
+
+    Cierra el bucle de aprendizaje sin registro manual. Idempotente: al resolver una, su nueva
+    decisión (ganada/perdida) pasa a ser la última y deja de ser candidata.
+    """
+    awards = list(session.scalars(select(Award)).all())
+    tenders = session.scalars(select(Tender).where(Tender.duplicate_of.is_(None))).all()
+    matched = won = lost = 0
+    for t in tenders:
+        last = session.scalars(
+            select(TenderDecision)
+            .where(TenderDecision.tender_id == t.id)
+            .order_by(TenderDecision.created_at.desc())
+        ).first()
+        if not last or (last.outcome or "").strip().lower() != "presentada":
+            continue  # solo las que presentamos y siguen sin resolver
+        award = _match_award(t, awards)
+        if not award:
+            continue
+        is_win = _is_keedio_win(award.awarded_supplier)
+        session.add(
+            TenderDecision(
+                tender_id=t.id,
+                decision=last.decision,
+                outcome="ganada" if is_win else "perdida",
+                awarded_company=award.awarded_supplier,
+                awarded_amount=award.awarded_amount,
+                actor="reconcile",
+                reason="Emparejado automáticamente con la adjudicación oficial.",
+            )
+        )
+        matched += 1
+        won += 1 if is_win else 0
+        lost += 0 if is_win else 1
+    session.commit()
+    return {"matched": matched, "ganadas": won, "perdidas": lost}

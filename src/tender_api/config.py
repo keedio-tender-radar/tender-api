@@ -58,6 +58,12 @@ class Settings(BaseSettings):
 
     # Logo de Keedio para los documentos generados (descargado y embebido; webp→png en runtime).
     keedio_logo_url: str = "https://keedio.com/images/Logo_keedio_hu_cd4a97c7d0e86e82.webp"
+    # Nombres de Keedio (coma-separados) para detectar victoria al emparejar con adjudicaciones.
+    keedio_supplier_names: str = "keedio"
+
+    @property
+    def keedio_supplier_list(self) -> list[str]:
+        return [n.strip().lower() for n in self.keedio_supplier_names.split(",") if n.strip()]
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

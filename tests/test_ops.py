@@ -12,7 +12,8 @@ def test_runs_log_and_summary(client):
 
 def test_calendar_ics(client):
     make_tender(client, deadline="2030-01-01T10:00:00+00:00")
-    r = client.get("/api/tenders/calendar.ics")
+    # scope=all incluye todas las activas (el default solo las accionables: seguimiento o GO).
+    r = client.get("/api/tenders/calendar.ics?scope=all")
     assert r.status_code == 200
     assert "text/calendar" in r.headers["content-type"]
     body = r.text
