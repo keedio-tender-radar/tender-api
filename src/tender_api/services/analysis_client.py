@@ -11,13 +11,13 @@ def is_configured() -> bool:
     return bool(settings.analysis_service_url)
 
 
-def _client() -> httpx.Client:
+def _client(timeout: float = 120) -> httpx.Client:
     """Cliente httpx hacia el servicio de análisis. Monkeypatcheable en tests."""
     headers = {}
     if settings.analysis_token:
         headers["X-Run-Token"] = settings.analysis_token
     return httpx.Client(
-        base_url=settings.analysis_service_url.rstrip("/"), timeout=120, headers=headers
+        base_url=settings.analysis_service_url.rstrip("/"), timeout=timeout, headers=headers
     )
 
 
@@ -34,7 +34,9 @@ def generate_drafts(
     market_context: dict | None = None, buyer_profile: dict | None = None,
 ) -> dict:
     """Devuelve {drafts:[{kind,title,content}]} con los borradores de oferta."""
-    with _client() as client:
+    # La memoria se genera apartado por apartado (~16 llamadas LLM, varios minutos): timeout amplio.
+    # Es una tarea de fondo (BackgroundTasks), así que esperar no bloquea al usuario.
+    with _client(timeout=600) as client:
         resp = client.post(
             "/generate-drafts",
             json={
