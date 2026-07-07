@@ -602,8 +602,15 @@ def services_status() -> dict:
 
 
 @router.get("/calendar.ics")
-def calendar_ics(session: Session = Depends(get_session)) -> Response:
-    """Calendario (.ics) con los cierres de las licitaciones activas (suscribible)."""
+def calendar_ics(
+    session: Session = Depends(get_session),
+    scope: str = Query(default="relevant", description="relevant (seguimiento o GO) | all"),
+) -> Response:
+    """Calendario (.ics) suscribible con los cierres de licitación.
+
+    Por defecto solo las ACCIONABLES (en seguimiento o con recomendación GO), para no saturar el
+    calendario; `scope=all` incluye todas las activas.
+    """
     now = datetime.now(UTC)
     rows = session.scalars(
         select(Tender).where(Tender.duplicate_of.is_(None), Tender.deadline.is_not(None))
@@ -617,6 +624,9 @@ def calendar_ics(session: Session = Depends(get_session)) -> Response:
         if dl < now - timedelta(days=1):
             continue
         score = _latest_score(session, t.id)
+        rec = (score.recommendation if score else "") or ""
+        if scope != "all" and t.status not in ("interested", "partner") and rec.lower() != "go":
+            continue  # solo lo accionable, salvo scope=all
         tag = f"[{score.recommendation.upper()}] " if score else ""
         stamp = dl.strftime("%Y%m%dT%H%M%SZ")
         lines += [
