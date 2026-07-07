@@ -419,11 +419,13 @@ def _mermaid_png(code: str) -> bytes | None:
     try:
         import httpx
 
+        # Timeout acotado: con varios diagramas, un kroki lento no debe agotar el gateway del
+        # entregable (Word/PDF). Si tarda, cae a texto (fallback) en vez de colgar la generación.
         resp = httpx.post(
             "https://kroki.io/mermaid/png",
             content=code.encode("utf-8"),
             headers={"Content-Type": "text/plain"},
-            timeout=25,
+            timeout=8,
         )
         if resp.status_code == 200 and resp.content[:8] == b"\x89PNG\r\n\x1a\n":
             return resp.content
