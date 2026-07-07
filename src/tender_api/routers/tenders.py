@@ -74,6 +74,20 @@ def _latest_score(session: Session, tender_id: str) -> TenderScore | None:
     ).first()
 
 
+def _latest_scores_map(session: Session, ids: list[str]) -> dict[str, TenderScore]:
+    """Último score de cada licitación en UNA consulta (evita el N+1 en top/urgent/search)."""
+    out: dict[str, TenderScore] = {}
+    if not ids:
+        return out
+    for s in session.scalars(
+        select(TenderScore)
+        .where(TenderScore.tender_id.in_(ids))
+        .order_by(TenderScore.created_at.desc())
+    ).all():
+        out.setdefault(s.tender_id, s)  # el primero (más reciente) gana
+    return out
+
+
 def _get_or_404(session: Session, tender_id: str) -> Tender:
     row = session.get(Tender, tender_id)
     if not row:
@@ -223,9 +237,11 @@ def search_tenders(
     if contracting_body:
         stmt = stmt.where(Tender.buyer.ilike(f"%{contracting_body}%"))
 
+    rows = session.scalars(stmt).all()
+    scores = _latest_scores_map(session, [r.id for r in rows])  # sin N+1
     items: list[tuple] = []
-    for r in session.scalars(stmt).all():
-        score = _latest_score(session, r.id)
+    for r in rows:
+        score = scores.get(r.id)
         total = score.total if score else None
         rec = score.recommendation if score else None
         days = semaphore.days_remaining(r.deadline)
@@ -274,15 +290,13 @@ def top_tenders(
     Web (Radar) y Telegram (digest) consumen este mismo endpoint → la misma foto diaria.
     """
     now = datetime.now(UTC)
-    scored = []
-    for tender in session.scalars(
-        select(Tender).where(Tender.duplicate_of.is_(None))
-    ).all():
-        if not include_expired and tender.deadline and _aware(tender.deadline) < now:
-            continue  # licitación vencida → fuera del ranking de activas
-        score = _latest_score(session, tender.id)
-        if score is not None:
-            scored.append((tender, score))
+    tenders = [
+        t
+        for t in session.scalars(select(Tender).where(Tender.duplicate_of.is_(None))).all()
+        if include_expired or not (t.deadline and _aware(t.deadline) < now)
+    ]
+    scores = _latest_scores_map(session, [t.id for t in tenders])  # sin N+1
+    scored = [(t, scores[t.id]) for t in tenders if t.id in scores]
     scored.sort(key=lambda pair: pair[1].total, reverse=True)
     return [
         TenderWithScore(tender=tender_to_contract(t), score=score_to_contract(s))
@@ -308,10 +322,11 @@ def urgent_tenders(
         .where(Tender.deadline <= limit_dt)
         .order_by(Tender.deadline.asc())
     ).all()
+    scores = _latest_scores_map(session, [t.id for t in rows])  # sin N+1
     return [
         TenderWithScore(
             tender=tender_to_contract(t),
-            score=(s := _latest_score(session, t.id)) and score_to_contract(s),
+            score=score_to_contract(scores[t.id]) if t.id in scores else None,
         )
         for t in rows
     ]
