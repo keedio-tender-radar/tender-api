@@ -31,7 +31,7 @@ def analyze(tender: dict, document_text: str | None) -> dict:
 
 def generate_drafts(
     tender: dict, document_text: str | None, score: dict | None,
-    market_context: dict | None = None,
+    market_context: dict | None = None, buyer_profile: dict | None = None,
 ) -> dict:
     """Devuelve {drafts:[{kind,title,content}]} con los borradores de oferta."""
     with _client() as client:
@@ -42,6 +42,7 @@ def generate_drafts(
                 "document_text": document_text,
                 "score": score,
                 "market_context": market_context,
+                "buyer_profile": buyer_profile,
             },
         )
         resp.raise_for_status()

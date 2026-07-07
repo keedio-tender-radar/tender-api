@@ -1377,9 +1377,11 @@ def _generate_and_store_drafts(session: Session, tender: Tender) -> list[Generat
     # Contexto de mercado (MVP-5) → estrategia de puja en los borradores (MVP-6).
     # Con buyer: incluye el incumbente (adjudicatario del último contrato del órgano).
     market_context = market.compute_context(session, tender.cpv, buyer=tender.buyer)
+    # Inteligencia del órgano: qué licita y a quién adjudica → contexto de redacción.
+    org_profile = market.buyer_profile(session, tender.buyer)
     result = analysis_client.generate_drafts(
         tender_to_contract(tender).model_dump(mode="json"), document_text, score_payload,
-        market_context=market_context,
+        market_context=market_context, buyer_profile=org_profile,
     )
 
     for old in session.scalars(
@@ -1474,6 +1476,7 @@ _DRAFT_FOLDER = {
     "checklist_administrativo": "03_administrativo",
     "documentos_requeridos": "03_administrativo",
     "carta_presentacion": "03_administrativo",
+    "analisis_pliego": "01_analisis",
 }
 _PENDING_HUMAN = [
     "Firma electrónica y certificados (ROLECE, DEUC, poderes)",

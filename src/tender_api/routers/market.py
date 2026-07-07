@@ -406,6 +406,43 @@ def _incumbent(session: Session, buyer: str | None) -> dict | None:
     }
 
 
+def buyer_profile(session: Session, buyer: str | None) -> dict | None:
+    """Perfil del órgano de contratación para contextualizar la redacción de la oferta.
+
+    Combina lo que ESTE órgano licita (sus otras licitaciones: CPV recurrentes, presupuesto medio)
+    con a quién ADJUDICA (histórico: baja media, nº de licitadores, quién suele ganar). Ayuda a la
+    IA a entender la motivación del órgano y qué espera.
+    """
+    if not buyer:
+        return None
+    tenders = list(session.scalars(select(Tender).where(Tender.buyer == buyer)).all())
+    awards = _filtered_awards(session, None, buyer)
+    if not tenders and not awards:
+        return None
+    cpv_div: dict[str, int] = defaultdict(int)
+    budgets: list[float] = []
+    for t in tenders:
+        div = _cpv_division(t.cpv)
+        if div:
+            cpv_div[div] += 1
+        if t.budget_amount:
+            budgets.append(t.budget_amount)
+    bajas = [b for a in awards if (b := _baja(a.budget_amount, a.awarded_amount)) is not None]
+    bidders = [a.num_bidders for a in awards if a.num_bidders]
+    return {
+        "buyer": buyer,
+        "tenders_seen": len(tenders),
+        "recurring_cpv": sorted(cpv_div, key=lambda k: cpv_div[k], reverse=True)[:5],
+        "budget_avg": round(sum(budgets) / len(budgets), 2) if budgets else None,
+        "awards_count": len(awards),
+        "avg_baja": _avg(bajas),
+        "avg_bidders": round(sum(bidders) / len(bidders), 1) if bidders else None,
+        "top_winners": [
+            {"supplier": c["supplier"], "wins": c["wins"]} for c in _competitors(awards, 3)
+        ],
+    }
+
+
 def compute_context(session: Session, cpv: list[str] | None, buyer: str | None = None) -> dict:
     """Contexto competitivo de una categoría CPV (reutilizado por la ruta y por los borradores).
 
