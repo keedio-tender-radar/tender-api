@@ -43,9 +43,11 @@ class Settings(BaseSettings):
     # actual, retrocompatible). Los servicios internos pueden usar RUN_TOKEN en su lugar.
     read_api_token: str = ""
 
-    # Telegram para alertas de observabilidad (fallos de cron). Vacío = sin alerta.
+    # Telegram para alertas de observabilidad (fallos de cron) y avisos (oferta lista). Vacío = off.
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    # URL pública del dashboard (para enlaces en los avisos de Telegram). Vacío = sin enlace.
+    dashboard_url: str = ""
 
     # Email (InsForge send-raw). Requiere plan de pago InsForge + DIGEST_EMAIL_TO configurado.
     insforge_api_url: str = ""  # p. ej. https://vz4wf92x.eu-central.insforge.app

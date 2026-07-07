@@ -1422,6 +1422,15 @@ def _set_draft_status(
     session.commit()
 
 
+def _notify_drafts_ready(tender: Tender, count: int) -> None:
+    """Avisa por Telegram cuando la oferta está lista (p. ej. tras «Preparar oferta» en el bot)."""
+    from tender_api.routers.runs import _notify_telegram
+
+    base = getattr(settings, "dashboard_url", "") or ""
+    link = f"\n{base.rstrip('/')}/tenders/{tender.id}" if base else ""
+    _notify_telegram(f"✅ Oferta lista: {count} borradores para «{tender.title}».{link}")
+
+
 def _run_draft_generation(tender_id: str) -> None:
     """Tarea en segundo plano: genera los borradores con su propia sesión y registra el estado."""
     with SessionLocal() as session:
@@ -1431,6 +1440,7 @@ def _run_draft_generation(tender_id: str) -> None:
         try:
             rows = _generate_and_store_drafts(session, tender)
             _set_draft_status(session, tender_id, "ok", count=len(rows))
+            _notify_drafts_ready(tender, len(rows))  # aviso Telegram (no fatal)
         except Exception as exc:  # noqa: BLE001 — cualquier fallo queda registrado para el sondeo
             session.rollback()
             _set_draft_status(session, tender_id, "error", detail=f"{type(exc).__name__}: {exc}")
