@@ -523,6 +523,7 @@ def reconcile_outcomes(session: Session = Depends(get_session)) -> dict:
     awards = list(session.scalars(select(Award)).all())
     tenders = session.scalars(select(Tender).where(Tender.duplicate_of.is_(None))).all()
     matched = won = lost = 0
+    resolved: list[tuple[str, bool, str | None]] = []
     for t in tenders:
         last = session.scalars(
             select(TenderDecision)
@@ -549,5 +550,22 @@ def reconcile_outcomes(session: Session = Depends(get_session)) -> dict:
         matched += 1
         won += 1 if is_win else 0
         lost += 0 if is_win else 1
+        resolved.append((t.title or "(sin título)", is_win, award.awarded_supplier))
     session.commit()
+    if resolved:
+        _notify_reconciled(resolved)
     return {"matched": matched, "ganadas": won, "perdidas": lost}
+
+
+def _notify_reconciled(resolved: list[tuple[str, bool, str | None]]) -> None:
+    """Avisa por Telegram de las licitaciones resueltas al emparejar con la adjudicación oficial."""
+    from tender_api.routers.runs import _notify_telegram
+
+    lines = [f"🔄 Reconciliación oficial: {len(resolved)} licitación(es) resuelta(s)"]
+    for title, is_win, supplier in resolved[:10]:
+        if is_win:
+            lines.append(f"🏆 Ganada: «{title[:60]}»")
+        else:
+            adj = f" → {supplier}" if supplier else ""
+            lines.append(f"❌ Perdida: «{title[:60]}»{adj}")
+    _notify_telegram("\n".join(lines))

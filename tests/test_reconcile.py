@@ -56,3 +56,19 @@ def test_reconcile_detects_keedio_win(client, monkeypatch):
 
     r = client.post("/api/market/reconcile-outcomes", headers={"X-Run-Token": "RT"}).json()
     assert r["ganadas"] == 1 and r["perdidas"] == 0
+
+
+def test_reconcile_notifies_telegram(client, monkeypatch):
+    from tender_api.routers import runs
+
+    monkeypatch.setattr(settings, "run_token", "RT")
+    sent: list[str] = []
+    monkeypatch.setattr(runs, "_notify_telegram", lambda text: sent.append(text))
+
+    t = make_tender(client, source_id="REC-N", buyer="Ayto Z", title="Servicios de datos")
+    _present(client, t["id"])
+    _award(client, "AW-N", "Ayto Z", "Servicios de datos avanzados", "Otra SL")
+    client.post("/api/market/reconcile-outcomes", headers={"X-Run-Token": "RT"})
+
+    assert sent and "Reconciliación oficial" in sent[0]
+    assert "Perdida" in sent[0]
